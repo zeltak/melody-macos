@@ -163,6 +163,12 @@ final class Updater {
         if System.agentInstalled(LaunchAgents.engine) {
             System.restartAgent(LaunchAgents.engine)
         }
+        // Updated from a shell (--update): the menu-bar app under its
+        // LaunchAgent is still the old one.
+        let underAgent = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == LaunchAgents.app
+        if !relaunch, !underAgent, System.agentInstalled(LaunchAgents.app) {
+            System.restartAgent(LaunchAgents.app)
+        }
         // Under its LaunchAgent, launchd starts the new copy; otherwise the
         // Finder opens it once this one has gone.
         if relaunch, ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] != LaunchAgents.app {
