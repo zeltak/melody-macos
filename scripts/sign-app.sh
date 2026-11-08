@@ -10,7 +10,13 @@ set -euo pipefail
 app=$1
 identity=$2
 contents="$app/Contents"
-sign() { codesign --force --sign "$identity" --timestamp=none "$@" >/dev/null; }
+sign() {
+    local output
+    if ! output=$(codesign --force --sign "$identity" --timestamp=none "$@" 2>&1); then
+        printf '%s\n' "$output" >&2
+        return 1
+    fi
+}
 
 is_macho() { file -b "$1" | grep -q 'Mach-O'; }
 

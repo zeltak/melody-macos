@@ -14,16 +14,18 @@ struct Options {
     var socket = Engine.defaultSocketPath()
     var check = false
     var enableEngine = false
+    var update = false
 }
 
 func usage() -> String {
     """
-    Usage: melody-engine [--socket PATH] [--check] [--enable-engine]
+    Usage: melody-engine [--socket PATH] [--check] [--enable-engine] [--update]
 
       --socket PATH    melodyd's socket (default \(Engine.defaultSocketPath()))
       --check          say whether melodyd answers, and exit
       --enable-engine  run this bundle's melodyd at login, open this app at
                        login, and exit
+      --update         install the latest release if it is newer, and exit
       -h, --help       show this help
 
     """
@@ -43,6 +45,7 @@ func parseOptions(_ arguments: [String]) -> Options {
             options.socket = arguments[index]
         case "--check": options.check = true
         case "--enable-engine": options.enableEngine = true
+        case "--update": options.update = true
         case "-h", "--help":
             print(usage(), terminator: "")
             exit(0)
@@ -405,6 +408,28 @@ if options.enableEngine {
         FileHandle.standardError.write(Data("melody-engine: \(error)\n".utf8))
         exit(1)
     }
+}
+if options.update {
+    let updater = Updater()
+    guard updater.enabled else {
+        FileHandle.standardError.write(Data("melody-engine: a development build does not update\n".utf8))
+        exit(1)
+    }
+    updater.relaunch = false
+    updater.changed = { state in
+        switch state {
+        case .current:
+            print("Build \(updater.currentBuild) is the latest")
+            exit(0)
+        case .installing(let step): print(step)
+        case .failed(let message):
+            FileHandle.standardError.write(Data("melody-engine: \(message)\n".utf8))
+            exit(1)
+        default: break
+        }
+    }
+    updater.check(thenInstall: true)
+    RunLoop.main.run()
 }
 guard holdSingleInstanceLock(socket: options.socket) else { exit(0) }
 let app = NSApplication.shared

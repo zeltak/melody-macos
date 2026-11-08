@@ -21,6 +21,8 @@ final class Updater {
 
     private(set) var state: State = .idle { didSet { changed(state) } }
     var changed: (State) -> Void = { _ in }
+    /// Whether to open the new copy when this one is opened by hand.
+    var relaunch = true
     private let repository: String?
     private let current: BuildNumber?
     private let queue = DispatchQueue(label: "org.melody.engine-app.updates")
@@ -156,7 +158,7 @@ final class Updater {
         }
         // Under its LaunchAgent, launchd starts the new copy; otherwise the
         // Finder opens it once this one has gone.
-        if ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] != LaunchAgents.app {
+        if relaunch, ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] != LaunchAgents.app {
             let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
             let relaunch = Process()
             relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
