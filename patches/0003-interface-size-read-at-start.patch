@@ -20,3 +20,36 @@ index 78aa01b0..93670bf7 100644
      bool ok = false;
      const auto value = settings.value(QLatin1String{interface_scale_key}, 1.0).toDouble(&ok);
      for (const auto offered : interfaceScales()) {
+diff --git a/src/workspace/settings_session.cpp b/src/workspace/settings_session.cpp
+index d10e45c0..dc1b7923 100644
+--- a/src/workspace/settings_session.cpp
++++ b/src/workspace/settings_session.cpp
+@@ -64,6 +64,9 @@ SettingsSession::SettingsSession(QObject* parent) : QObject(parent) {
+     read(panel_animations_key, true);
+     read(coloured_initials_key, false);
+     read(QLatin1String(color_scheme_key), QStringLiteral("system"));
++    // As its choices hold it, so the combo shows what is chosen: unread, it
++    // showed "As the system" whatever the next start would use.
++    values_.insert(QLatin1String(interface_scale_key), QString::number(chosenInterfaceScale()));
+     read(lists_display_key, QStringLiteral("tabs"));
+     auto profile = settings.value(buffer_profile_key, QStringLiteral("balanced")).toString();
+     const auto capacity = settings.value(buffer_capacity_key, 750).toInt();
+diff --git a/tests/bench_main_window_test_7.cpp b/tests/bench_main_window_test_7.cpp
+index e3faedda..0dd460c6 100644
+--- a/tests/bench_main_window_test_7.cpp
++++ b/tests/bench_main_window_test_7.cpp
+@@ -1078,6 +1078,14 @@ void BenchMainWindowTest::interfaceSizeIsChosenForTheNextStart() {
+     QTRY_VERIFY(lifetime.isNull());
+     QSettings{}.sync();
+     QCOMPARE(chosenInterfaceScale(), 1.5);
++    // Opened again, Settings shows the size chosen, not "As the system".
++    window.findChild<QAction*>(QStringLiteral("action-settings"))->trigger();
++    QTRY_VERIFY(window.findChild<SettingsDialog*>() != nullptr);
++    dialog = window.findChild<SettingsDialog*>();
++    combo = dialog->findChild<QComboBox*>(QStringLiteral("bench-settings-interface-scale"));
++    QVERIFY(combo != nullptr);
++    QCOMPARE(combo->currentData().toString(), QStringLiteral("1.5"));
++    dialog->reject();
+     QSettings{}.setValue(QLatin1String(interface_scale_key), QStringLiteral("7"));
+     QSettings{}.sync();
+     QCOMPARE(chosenInterfaceScale(), 1.0);
