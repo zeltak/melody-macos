@@ -1,5 +1,35 @@
+diff --git a/src/bench/catalogue_source.cpp b/src/bench/catalogue_source.cpp
+index 86c687b5..fad394da 100644
+--- a/src/bench/catalogue_source.cpp
++++ b/src/bench/catalogue_source.cpp
+@@ -438,6 +438,11 @@ bool CatalogueSource::reachable() const {
+     return link_->client && link_->client->connected();
+ }
+ 
++bool CatalogueSource::refused() const {
++    const std::lock_guard guard{link_->mutex};
++    return link_->refused;
++}
++
+ QString CatalogueSource::describe() const {
+     const std::lock_guard guard{link_->mutex};
+     const auto& failure = link_->failure;
+diff --git a/src/bench/catalogue_source.hpp b/src/bench/catalogue_source.hpp
+index 72e35a8e..15c17272 100644
+--- a/src/bench/catalogue_source.hpp
++++ b/src/bench/catalogue_source.hpp
+@@ -111,6 +111,9 @@ class CatalogueSource final {
+     [[nodiscard]] QString describe() const;
+     // Whether the library can be reached now; describe() says why not.
+     [[nodiscard]] bool reachable() const;
++    // Whether the engine answered and turned this client away: the password,
++    // or another protocol (ADR-0260) -- not to be retried until asked.
++    [[nodiscard]] bool refused() const;
+ 
+   private:
+     // The address and password of an engine elsewhere; false, said why.
 diff --git a/src/protocol/src/client.cpp b/src/protocol/src/client.cpp
-index ddb1b4d3..70375a37 100644
+index ddb1b4d3..6dc7be2d 100644
 --- a/src/protocol/src/client.cpp
 +++ b/src/protocol/src/client.cpp
 @@ -73,7 +73,9 @@ constexpr std::size_t max_finished_early = 64U;
@@ -35,7 +65,7 @@ index ddb1b4d3..70375a37 100644
      for (auto* candidate = found; candidate != nullptr; candidate = candidate->ai_next) {
          descriptor = core::socket_cloexec(
              candidate->ai_family, candidate->ai_socktype | SOCK_CLOEXEC, candidate->ai_protocol);
-@@ -166,12 +172,20 @@ core::Result<int> open_connection(const Endpoint& endpoint) {
+@@ -166,12 +172,19 @@ core::Result<int> open_connection(const Endpoint& endpoint) {
          if (connect_within(descriptor, candidate->ai_addr, candidate->ai_addrlen)) {
              break;
          }
@@ -52,13 +82,12 @@ index ddb1b4d3..70375a37 100644
 +        return std::unexpected(transport_error(
 +            failure == 0 ? std::string{"could not reach the engine"}
 +                         : "could not reach the engine (" +
-+                               std::error_code{failure, std::generic_category()}.message() +
-+                               ")"));
++                               std::error_code{failure, std::generic_category()}.message() + ")"));
      }
      return descriptor;
  }
 diff --git a/src/workspace/library_browser.cpp b/src/workspace/library_browser.cpp
-index deb5ef7e..b882d85f 100644
+index deb5ef7e..1a7cefe6 100644
 --- a/src/workspace/library_browser.cpp
 +++ b/src/workspace/library_browser.cpp
 @@ -257,6 +257,16 @@ LibraryBrowser::LibraryBrowser(const CatalogueSource& catalogues, EngineKey engi
@@ -78,7 +107,7 @@ index deb5ef7e..b882d85f 100644
      connect(&query_watcher_, &QFutureWatcherBase::finished, this, [this] {
          querying_ = false;
          auto outcome = query_watcher_.result();
-@@ -370,6 +380,34 @@ void LibraryBrowser::refreshSourceLabel() {
+@@ -370,6 +380,37 @@ void LibraryBrowser::refreshSourceLabel() {
          source_tooltip_ = tooltip;
          emit sourceChanged();
      }
@@ -88,8 +117,11 @@ index deb5ef7e..b882d85f 100644
 +void LibraryBrowser::scheduleReconnect() {
 +    // Only an engine elsewhere: this computer's is started, not reached,
 +    // and one that will not start is not started again every few seconds.
++    // Nor one that answered and refused -- the password, or another protocol
++    // (ADR-0260): that is tried again when asked, not in a loop.
 +    if (stopped_ || catalogues_ == nullptr || !catalogues_->configured() ||
-+        catalogues_->startsOwnEngine()) {
++        catalogues_->startsOwnEngine() || catalogues_->refused()) {
++        reconnect_timer_.stop();
 +        return;
 +    }
 +    if (catalogues_->reachable()) {
@@ -113,7 +145,7 @@ index deb5ef7e..b882d85f 100644
  }
  
  void LibraryBrowser::stop() {
-@@ -384,6 +422,7 @@ void LibraryBrowser::stop() {
+@@ -384,6 +425,7 @@ void LibraryBrowser::stop() {
      search_timer_.stop();
      poll_timer_.stop();
      change_timer_.stop();
@@ -148,18 +180,19 @@ index 0099f00f..7c86f62a 100644
      QElapsedTimer elapsed_refresh_;
      QString status_;
 diff --git a/tests/library_panel_engine_test.cpp b/tests/library_panel_engine_test.cpp
-index 08fb68c1..1382b5de 100644
+index 08fb68c1..c1d88b2d 100644
 --- a/tests/library_panel_engine_test.cpp
 +++ b/tests/library_panel_engine_test.cpp
-@@ -48,6 +48,7 @@ class LibraryPanelEngineTest final : public QObject {
+@@ -48,6 +48,8 @@ class LibraryPanelEngineTest final : public QObject {
      void aConfiguredEngineServesThePanel();
      void everyPathReachesTheEngineNotTheDatabase();
      void anUnreachableEngineIsSaidAndThenReached();
 +    void anEngineThatComesUpLaterIsReachedWithoutRefresh();
++    void anEngineThatRefusesIsNotAskedAgainAndAgain();
      void thePanelSaysWhichLibraryItIsShowing();
      void theSearchDialogAsksTheEngineToo();
      void aTcpEngineIsReachedWithItsToken();
-@@ -583,6 +584,45 @@ void LibraryPanelEngineTest::anUnreachableEngineIsSaidAndThenReached() {
+@@ -583,6 +585,81 @@ void LibraryPanelEngineTest::anUnreachableEngineIsSaidAndThenReached() {
      (*server)->stop();
  }
  
@@ -202,6 +235,45 @@ index 08fb68c1..1382b5de 100644
 +    (*server)->stop();
 +}
 +
++// ADR-0260: an engine that answers and turns the client away -- another
++// protocol here, a wrong password the same -- is tried again when asked, not
++// in a loop. Only an engine that could not be reached is retried by itself.
++void LibraryPanelEngineTest::anEngineThatRefusesIsNotAskedAgainAndAgain() {
++    QTemporaryDir directory;
++    QVERIFY(directory.isValid());
++    const std::filesystem::path database{
++        (directory.path() + QStringLiteral("/library.sqlite3")).toStdString()};
++    const auto socket_text = directory.path() + QStringLiteral("/other-protocol.sock");
++
++    std::atomic<int> asked{0};
++    protocol::Dispatcher dispatcher;
++    dispatcher.on("engine.info", [&asked](const protocol::Json&) {
++        ++asked;
++        return core::Result<protocol::Json>{protocol::Json{{"name", "elsewhere"}, {"protocol", 2}}};
++    });
++    auto server = engine::Server::listen(socket_text.toStdString(), dispatcher);
++    QVERIFY(server.has_value());
++    (*server)->start();
++    QSettings{}.setValue(QLatin1String(SettingsDialog::library_engine_socket_key), socket_text);
++
++    CatalogueSource catalogues{database, CatalogueSource::Role::remote};
++    LocalLibraryPanel panel{catalogues};
++    panel.show();
++    QTRY_VERIFY(catalogues.refused());
++    // What opening the panel asks -- the library and its roots -- settled.
++    QTest::qWait(300);
++    const auto opening = asked.load();
++    QVERIFY(opening >= 1);
++    // Retries of an unreachable engine come after 1 s and 2 s more.
++    QTest::qWait(3500);
++    QCOMPARE(asked.load(), opening);
++
++    (*server)->stop();
++}
++
  // ADR-0220: a silent fallback is indistinguishable from the engine working,
  // which is exactly how a broken setup went unnoticed. The panel now states
  // which of the three situations it is in, and keeps stating it.
+-- 
+2.55.0
+
