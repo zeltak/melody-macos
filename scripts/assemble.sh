@@ -26,7 +26,9 @@ apps="$work/apps"
 # shellcheck source=/dev/null
 source "$work/version.env"
 
-if [[ -z ${DEVELOPER_DIR:-} && -d /Applications/Xcode.app ]]; then
+# Xcode when its licence is accepted; the Command Line Tools otherwise.
+if [[ -z ${DEVELOPER_DIR:-} && -d /Applications/Xcode.app ]] &&
+    DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -license check >/dev/null 2>&1; then
     export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
 
