@@ -75,6 +75,27 @@ fi
 # shellcheck source=/dev/null
 source work/version.env
 minimum=$(cat work/apps/minimum-macos)
+# A Homebrew bottle built for a newer macOS than the building Mac's raises
+# the minimum past every Mac on that version (freetype 2.15 on 2026-11-08
+# wanted 27.2): stop rather than publish a build this Mac cannot install.
+# `brew reinstall --build-from-source` the libraries named.
+if [[ $build_host == local ]]; then
+    builder=$(sw_vers -productVersion)
+else
+    builder=$(ssh "$build_host" sw_vers -productVersion)
+fi
+if [[ $(printf '%s\n%s\n' "$minimum" "$builder" | sort -V | tail -1) != "$builder" ]]; then
+    printf 'The apps need macOS %s, newer than the building Mac'"'"'s %s, because of:\n' \
+        "$minimum" "$builder" >&2
+    find work/apps -name '*.dylib' -o -type f -perm +111 | while read -r file; do
+        minos=$(vtool -show-build "$file" 2>/dev/null | awk '/minos/ { print $2; exit }')
+        if [[ -n $minos && $(printf '%s\n%s\n' "$minos" "$builder" | sort -V | tail -1) != "$builder" ]]; then
+            printf '  %s (%s)\n' "${file#work/apps/}" "$minos" >&2
+        fi
+    done
+    printf 'Rebuild those Homebrew libraries here: brew reinstall --build-from-source NAME...\n' >&2
+    exit 1
+fi
 
 # --- 2. Sign ---------------------------------------------------------------------
 for app in "work/apps/Melody.app" "work/apps/Melody Engine.app"; do
