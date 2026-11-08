@@ -8,8 +8,8 @@
 #
 #   scripts/build-upstream.sh [--repo URL] [--ref REF]
 #
-# Leaves the source in work/src, the build in work/build and writes
-# work/version.env: VERSION, BUILD and COMMIT.
+# Applies patches/*.patch. Leaves the source in work/src, the build in
+# work/build and writes work/version.env: VERSION, BUILD and COMMIT.
 
 set -euo pipefail
 
@@ -38,8 +38,16 @@ if [[ ! -d $source/.git ]]; then
 fi
 git -C "$source" remote set-url origin "$repo"
 git -C "$source" fetch --quiet --tags --force origin "$ref"
-git -C "$source" checkout --quiet --detach FETCH_HEAD
+git -C "$source" checkout --quiet --force --detach FETCH_HEAD
 git -C "$source" clean -fdxq -e build
+# Fixes for the Mac not (yet) in melody-music, one patch each, in order. One
+# that no longer applies has been taken upstream or needs redoing.
+for patch in "$root"/patches/*.patch; do
+    [[ -e $patch ]] || continue
+    git -C "$source" apply "$patch" ||
+        { printf 'patches/%s no longer applies to %s\n' "$(basename "$patch")" "$ref" >&2; exit 1; }
+    printf 'Applied patches/%s\n' "$(basename "$patch")"
+done
 
 commit=$(git -C "$source" rev-parse HEAD)
 # Tagged: that version; otherwise the last tag, the commits since and the
