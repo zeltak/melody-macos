@@ -5,7 +5,7 @@
 # moves it off whatever ran Melody there before. After this, Melody Engine
 # keeps the Mac up to date by itself.
 #
-#   scripts/install-mac.sh [--server] [--qt-scale N] TARGET DMG
+#   scripts/install-mac.sh [--server] TARGET DMG
 #
 # TARGET is "local" or an SSH host (as in ~/.ssh/config).
 #
@@ -17,27 +17,23 @@
 # app (melody-engine --enable-engine), with the engine's usual state,
 # ~/.config/melody/melodyd.conf and socket.
 #
-# --qt-scale N: Qt draws Melody N times larger (QT_SCALE_FACTOR, set at
-# every login by the LaunchAgent org.melody.environment) -- for a display
-# used at 1x.
-#
 # Moved aside, never deleted, into ~/Library/Application Support/melody/
 # install-backups/<time>: the old launcher ~/Applications/Melody.app, copies
 # of the official plugins in ~/Library/Application Support/melody/plugins
 # (which would hide the app's own, newer ones), and on a server the
 # LaunchAgents com.zeltak.melodyd and org.melody.status and
-# /Applications/Melody Engine Status.app. A melodyd running from a build
-# folder is stopped, as are the Melody apps themselves.
+# /Applications/Melody Engine Status.app; and the LaunchAgent
+# org.melody.environment, which set QT_SCALE_FACTOR before Melody's own
+# Settings › General › Interface size worked. A melodyd running from a
+# build folder is stopped, as are the Melody apps themselves.
 
 set -euo pipefail
 
 server=no
-scale=
 while (($# > 0)); do
     case $1 in
     --server) server=yes; shift ;;
-    --qt-scale) scale=$2; shift 2 ;;
-    -h|--help) sed -n '4,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '4,27p' "$0"; exit 0 ;;
     -*) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
     *) break ;;
     esac
@@ -46,12 +42,11 @@ done
 target=$1
 dmg=$2
 [[ -f $dmg ]] || { printf 'no such DMG: %s\n' "$dmg" >&2; exit 1; }
-[[ -z $scale || $scale =~ ^[0-9]+(\.[0-9]+)?$ ]] || { printf '%s\n' '--qt-scale needs a number' >&2; exit 2; }
 
-# What runs on the Mac being installed: $1 the DMG there, $2 server, $3 scale.
+# What runs on the Mac being installed: $1 the DMG there, $2 server.
 read -r -d '' installer <<'INSTALLER' || true
 set -euo pipefail
-dmg=$1 server=$2 scale=$3
+dmg=$1 server=$2
 uid=$(id -u)
 support="$HOME/Library/Application Support/melody"
 backup="$support/install-backups/$(date +%Y%m%d-%H%M%S)"
@@ -139,31 +134,13 @@ for app in "${apps[@]}"; do
     say "installed $installed"
 done
 
-if [[ -n $scale ]]; then
-    plist="$HOME/Library/LaunchAgents/org.melody.environment.plist"
-    cat >"$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>org.melody.environment</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>/bin/launchctl</string>
-		<string>setenv</string>
-		<string>QT_SCALE_FACTOR</string>
-		<string>$scale</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-</dict>
-</plist>
-EOF
+# Superseded by Settings › General › Interface size.
+environment="$HOME/Library/LaunchAgents/org.melody.environment.plist"
+if [[ -f $environment ]]; then
     launchctl bootout "gui/$uid/org.melody.environment" 2>/dev/null || true
-    launchctl bootstrap "gui/$uid" "$plist"
-    launchctl setenv QT_SCALE_FACTOR "$scale"
-    say "Qt draws at ${scale}x (org.melody.environment)"
+    launchctl unsetenv QT_SCALE_FACTOR
+    keep "$environment"
+    say "Melody's size is now Settings › General › Interface size"
 fi
 
 if [[ $server == yes ]]; then
@@ -188,9 +165,9 @@ printf '==> %s: %s\n' "$target" "$(basename "$dmg")"
 if [[ $target == local ]]; then
     copy="$(mktemp -d /tmp/melody-install.XXXXXX)/Melody.dmg"
     cp "$dmg" "$copy"
-    bash -s -- "$copy" "$server" "$scale" <<<"$installer"
+    bash -s -- "$copy" "$server" <<<"$installer"
 else
     copy=/tmp/melody-install-$$.dmg
     scp -q "$dmg" "$target:$copy"
-    ssh "$target" "bash -s -- $(printf '%q ' "$copy" "$server" "$scale")" <<<"$installer"
+    ssh "$target" "bash -s -- $(printf '%q ' "$copy" "$server")" <<<"$installer"
 fi

@@ -8,7 +8,7 @@ with the signing certificate. Last done 2026-11-08: build 1229.6 (Melody
 
 | Mac | SSH | macOS | Role | Installed |
 |---|---|---|---|---|
-| itai's Mac Studio | (this Mac) | 27.0 | builds, signs, publishes; listens | Melody, Melody Engine (opens at login), Qt at 2x |
+| itai's Mac Studio | (this Mac) | 27.0 | builds, signs, publishes; listens | Melody (Interface size 200%), Melody Engine (opens at login) |
 | ikloog mini server | `macmini` (192.168.1.111) | 27.2 | **the music server**: engine "melody-mini" | Melody Engine, running melodyd at login |
 | ikloog--mbair (MacBook Air) | `air` (192.168.1.85) | 27.0.1 | listens | Melody, Melody Engine (opens at login) |
 
@@ -92,7 +92,7 @@ Server first, as the other two connect to it:
 
 ```sh
 scripts/install-mac.sh --server  macmini dist/Melody-1229.6.dmg
-scripts/install-mac.sh --qt-scale 2 local dist/Melody-1229.6.dmg   # this Mac Studio
+scripts/install-mac.sh local dist/Melody-1229.6.dmg              # this Mac Studio
 scripts/install-mac.sh           air     dist/Melody-1229.6.dmg
 ```
 
@@ -114,9 +114,11 @@ Melody Engine. `scripts/install-mac.sh --help` has the details.
 - **Otherwise** (listening Macs) both apps are installed and Melody Engine
   opens at login (`melody-engine --open-at-login`), only to keep both apps
   up to date. Melody starts its own melodyd when it needs one.
-- **`--qt-scale 2`** is for the Mac Studio's 7680x2160 display, used at 1x. It
-  is the LaunchAgent `org.melody.environment`, running
-  `launchctl setenv QT_SCALE_FACTOR 2` at login.
+- **Melody's size** is Settings › General › Interface size (200% on the Mac
+  Studio's 7680x2160 display, used at 1x), kept in Melody's own settings
+  and used from the next start (patch 0003). The LaunchAgent
+  `org.melody.environment` that set `QT_SCALE_FACTOR` before that worked is
+  moved aside by `install-mac.sh` where it is still installed.
 
 Nothing is deleted. What the old setup used is moved to
 `~/Library/Application Support/melody/install-backups/<time>/`:
