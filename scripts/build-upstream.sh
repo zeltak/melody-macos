@@ -61,7 +61,11 @@ homebrew=$(brew --prefix)
 export CMAKE_PREFIX_PATH="$(brew --prefix qt)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export PKG_CONFIG_PATH="$homebrew/lib/pkgconfig:$homebrew/share/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix curl)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
+# pkg-config's answers are cached with the Cellar path of the version found
+# then: forgotten each time, so a brew upgrade (ffmpeg 8 to 9) is followed
+# instead of linking a library that is no longer in /opt/homebrew/opt.
 cmake --preset macos -S "$source" -B "$build" \
+    -U '__pkg_config_checked_*' -U 'pkgcfg_lib_*' \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTING=OFF \
     -DMELODY_WARNINGS_AS_ERRORS=OFF \

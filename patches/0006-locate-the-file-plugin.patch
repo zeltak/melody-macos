@@ -1,0 +1,690 @@
+From 94fe0dbfa43c961f54c0bc40e64a88ec2756b6f8 Mon Sep 17 00:00:00 2001
+From: ikloog <ikloog@gmail.com>
+Date: Sun, 8 Nov 2026 17:54:48 -0500
+Subject: [PATCH] Locate the file: the playing track's file in your file
+ manager
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A trigger run by hand -- from Workspace › Run, so from the command palette
+too -- is now told what plays, as a panel is: `playing`, with the engine
+playing it, or null with nothing playing. Started any other way it is told
+nothing of it. ADR-0295 has an amendment.
+
+With it comes an official plugin, Locate the file, off until enabled: the
+playing track's file, from Workspace › Run, or the tracks chosen, from the
+context menu -- the first of each folder -- shown in the system's file
+manager (Finder on macOS, the file selected; elsewhere FileManager1, else
+xdg-open on the folder), Tandem, or a shell command of one's own, {} the
+file and {folder} its folder. An engine's music folder can be mapped to
+where it is mounted here; a file not here is said to be so.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/adr/0295-plugin-triggers.md    |  26 ++++++
+ docs/feature-matrix.md              |   2 +-
+ docs/plugins.md                     |  16 +++-
+ plugins/README.md                   |   1 +
+ plugins/locate/locate               | 131 +++++++++++++++++++++++++++
+ plugins/locate/plugin.json          |  22 +++++
+ src/bench/bench_main_window.hpp     |   9 +-
+ src/bench/bench_plugin_triggers.cpp |  10 ++-
+ src/bench/bench_plugins.cpp         |   2 +-
+ src/workspace/plugins.cpp           |  52 ++++++-----
+ src/workspace/plugins.hpp           |  17 +++-
+ tests/bench_main_window_test_2.cpp  |  30 +++++--
+ tests/plugins_test.cpp              | 132 ++++++++++++++++++++++++++++
+ 13 files changed, 405 insertions(+), 45 deletions(-)
+ create mode 100755 plugins/locate/locate
+ create mode 100644 plugins/locate/plugin.json
+
+diff --git a/docs/adr/0295-plugin-triggers.md b/docs/adr/0295-plugin-triggers.md
+index 69a3ce39..2cc90e4c 100644
+--- a/docs/adr/0295-plugin-triggers.md
++++ b/docs/adr/0295-plugin-triggers.md
+@@ -69,3 +69,29 @@ ADR-0288's actions, ADR-0291's panels and ADR-0293's providers.
+ - `bench-main-window`: a plugin's triggers run at start, from Workspace ›
+   Run, once the library changed and was still -- asked again while running,
+   once more after -- and for new albums; turned off, its entry goes.
++
++## Amendment, 2026-11-08: by hand, told what plays
++
++A trigger run by hand is asked for from the menu or the command palette,
++where "the playing track's file", "send what plays to …" are what one wants
++a command for -- and until now it knew nothing of what plays.
++
++- **Run by hand, a trigger is told `playing`** as a panel is (ADR-0291):
++  the track, its path within its music folder, its length, and the `engine`
++  playing it, which need not be the one holding the library; `null` with
++  nothing playing. Started any other way, it is told nothing of it: what
++  plays when a scan ends is happenstance.
++- **An official Locate the file plugin** comes with Melody, off until
++  enabled: the playing track's file, from Workspace › Run, or the tracks
++  chosen, from the context menu, shown in the system's file manager (Finder
++  on macOS, the file selected; elsewhere `org.freedesktop.FileManager1`,
++  else `xdg-open` on the folder), Tandem, or a shell command of one's own
++  (`{}` the file, `{folder}` its folder). Paths are the engine's: a setting
++  maps an engine's music folder to where it is mounted here, and a file not
++  here is said to be so rather than a folder opened.
++
++Verification: `plugins` -- a hand-run trigger is told what plays, null with
++nothing, and other triggers not; Locate shows the first file of each folder
++chosen and, by hand, the playing one through a mapped folder, and says when
++nothing plays or the file is not here. `bench-main-window` -- Workspace ›
++Run's entry, run while a track plays, is told its path.
+diff --git a/docs/feature-matrix.md b/docs/feature-matrix.md
+index e58de690..859f1b18 100644
+--- a/docs/feature-matrix.md
++++ b/docs/feature-matrix.md
+@@ -175,7 +175,7 @@ Evidence: [conversion](playback-library-conversion.md#converter),
+ | Grouped search presets | Implemented | ADR-0217: 25 parameterized/fixed starting points under Explore, Favourites, Listening, Audio properties and Library maintenance. Generated tkq-1 stays editable and saveable. Local and Melody use the same catalog, with unsupported remote presets hidden using execution capability checks. Corpus and UI tests cover generation, escaping, bounds, translation, scope gates, cancellation and input focus. Recently-added/lossless classification and a general visual builder remain deferred. |
+ | Query dialect | Implemented | `tkq-1` (ADR-0150): own versioned dialect, foobar-inspired keyword surface, normative spec in [query-language.md](query-language.md); no external dialect compatibility. Structured filtering runs over the migration-30 index substrate behind the library panel's query toggle and the standalone search dialog (ADR-0153), whose tab scope shares the exact row evaluation and probes missing technicals on demand. Saved searches with explicit dialects are implemented in ADR-0163; shared dynamic definitions are covered by ADR-0195. A visual query builder remains open. |
+ | Listening together | Implemented (phases 1 to 4) | ADR-0302: a host's engine tells a melody-together server (Go, one static binary, behind a web proxy) what it plays on the server's clock; friends' engines join by invite, find the track in their own library -- by MusicBrainz track id, else title, artist and album -- and play it where the host is, seeking back from drift; a track lacking is played from the host's Opus copy, sent once to the server while anyone listens and fetched ahead. `together.*` methods, `melody-cli together`, the official Listen together plugin (tested in `together`, `engine-together`, `plugins`). The invite opens a web page: friends without Melody listen there, in step, with who listens and the room's chat around Melody's blackbird; those with Melody open it by a melody:// link. At a party, friends suggest tracks of their own and vote, and the room's most wanted takes turns with the host's. See [together.md](together.md). |
+-| Plugin actions | Implemented | ADR-0288: a plugin is a program apart with a `plugin.json`, found in `~/.local/share/melody/plugins`, off until enabled on its own page, Settings → Plugins; its actions are entries in the context menus of track lists and the library, handed the albums chosen in JSON -- their folders within the music folder included -- and their output notified, copied, or shown as a list window of rows with links; what a plugin needs set -- text, secrets, toggles, choices -- asked for in a dialog behind its Settings… button and handed to every run, secrets kept in a file of their own, settings of an optional feature beneath its toggle and greyed until it is ticked, a link to a page about one (ADR-0300); panels -- docks beside Lyrics, there once the plugin is enabled, shown and hidden with the others by Panels (ADR-0299) -- asked about what plays while open and told every tag of the playing track and, asking, the artist's albums in the library (ADR-0301), and drawn from the headings, paragraphs, items, images and links they answer -- the title as the heading, sections ruled, long paragraphs folded, images as wide as the panel, links a row of small buttons (ADR-0291); controls -- inputs, switches, buttons, a row's buttons -- that run it again (ADR-0303); an answer asking to be asked again after a few seconds while what it shows comes, its place kept (ADR-0312); tracks, status lines, people and filter badges drawn as Melody draws its own, buttons by their role, no styling of a plugin's own (ADR-0304); lyrics providers, asked in turn when the files have no lyrics, the first found shown and followed if synced -- never written (ADR-0293); triggers, run for new albums, once the library changed and was still, every so many minutes, at start or from Workspace › Run, one run of each at a time (ADR-0295) (tested in `plugins`, `bench-main-window`). See [plugins.md](plugins.md). The official web search (MusicBrainz, Discogs, Bandcamp, Rate Your Music, AllMusic) and the "About" panel on the playing artist and album (MusicBrainz, Wikidata and Wikipedia: the artist's photo, both summaries, the album's date, kind and label, links -- Discogs, Bandcamp, Rate Your Music and AllMusic too -- kept a week, in the Wikipedia language chosen, either half off by a setting; the artist's albums and EPs on MusicBrainz -- Discogs, with a token, for an artist it does not know -- that are not in the library, the ids the files carry used rather than searched for, ADR-0301; the albums from a dropwatch where its address is set and it watches the artist, MusicBrainz otherwise, ADR-0309; drawn as rows with their covers, badges showing or hiding the albums and the EPs, the choice remembered, ADR-0304; never waiting for a cover -- those not kept fetched by a process of their own while the panel asks to be asked again, ADR-0312) are installed with Melody, off until enabled. The official LRCLIB lyrics provider comes with Melody, off until enabled. So does the official Scripts plugin: a shell command for each trigger, set in its settings. |
++| Plugin actions | Implemented | ADR-0288: a plugin is a program apart with a `plugin.json`, found in `~/.local/share/melody/plugins`, off until enabled on its own page, Settings → Plugins; its actions are entries in the context menus of track lists and the library, handed the albums chosen in JSON -- their folders within the music folder included -- and their output notified, copied, or shown as a list window of rows with links; what a plugin needs set -- text, secrets, toggles, choices -- asked for in a dialog behind its Settings… button and handed to every run, secrets kept in a file of their own, settings of an optional feature beneath its toggle and greyed until it is ticked, a link to a page about one (ADR-0300); panels -- docks beside Lyrics, there once the plugin is enabled, shown and hidden with the others by Panels (ADR-0299) -- asked about what plays while open and told every tag of the playing track and, asking, the artist's albums in the library (ADR-0301), and drawn from the headings, paragraphs, items, images and links they answer -- the title as the heading, sections ruled, long paragraphs folded, images as wide as the panel, links a row of small buttons (ADR-0291); controls -- inputs, switches, buttons, a row's buttons -- that run it again (ADR-0303); an answer asking to be asked again after a few seconds while what it shows comes, its place kept (ADR-0312); tracks, status lines, people and filter badges drawn as Melody draws its own, buttons by their role, no styling of a plugin's own (ADR-0304); lyrics providers, asked in turn when the files have no lyrics, the first found shown and followed if synced -- never written (ADR-0293); triggers, run for new albums, once the library changed and was still, every so many minutes, at start or from Workspace › Run, one run of each at a time, told what plays when run by hand (ADR-0295) (tested in `plugins`, `bench-main-window`). See [plugins.md](plugins.md). The official web search (MusicBrainz, Discogs, Bandcamp, Rate Your Music, AllMusic) and the "About" panel on the playing artist and album (MusicBrainz, Wikidata and Wikipedia: the artist's photo, both summaries, the album's date, kind and label, links -- Discogs, Bandcamp, Rate Your Music and AllMusic too -- kept a week, in the Wikipedia language chosen, either half off by a setting; the artist's albums and EPs on MusicBrainz -- Discogs, with a token, for an artist it does not know -- that are not in the library, the ids the files carry used rather than searched for, ADR-0301; the albums from a dropwatch where its address is set and it watches the artist, MusicBrainz otherwise, ADR-0309; drawn as rows with their covers, badges showing or hiding the albums and the EPs, the choice remembered, ADR-0304; never waiting for a cover -- those not kept fetched by a process of their own while the panel asks to be asked again, ADR-0312) are installed with Melody, off until enabled. The official LRCLIB lyrics provider comes with Melody, off until enabled. So does the official Scripts plugin: a shell command for each trigger, set in its settings. And the official Locate the file: the playing track's file, from Workspace › Run and the palette, or the tracks chosen, shown in the system's file manager, Tandem, or a command of one's own, an engine's music folder mapped to where it is mounted here. |
+ | CD ripping, radio, remote import | Deferred | Separate product/compatibility decisions. No transactional Melody upload/import capability is claimed by this client. |
+ 
+ ## Format-support dimensions
+diff --git a/docs/plugins.md b/docs/plugins.md
+index 5d1c1760..c1cb3265 100644
+--- a/docs/plugins.md
++++ b/docs/plugins.md
+@@ -4,7 +4,8 @@ A plugin adds an entry to the context menu of track lists and of the library
+ -- "Share album", "Send to …" -- a side panel, lyrics, or a program run on the
+ library's news. A few official ones come with Melody
+ ([`plugins/`](../plugins): the web search, a panel about the playing artist
+-and album, lyrics from LRCLIB, and Scripts, your own commands); everything
++and album, lyrics from LRCLIB, Scripts, your own commands, and Locate the
++file, in your file manager); everything
+ else is written and published apart. A plugin is a program of its
+ own, in any language; Melody runs it, tells it what was chosen in JSON, and
+ shows what it answers ([ADR-0288](adr/0288-plugin-actions.md)).
+@@ -350,6 +351,19 @@ music folders -- and, for new albums, the albums, as an action gets them:
+  "music_folders": ["/srv/music"], "settings": {…}}
+ ```
+ 
++Run by hand, it is told what plays too, as a panel is -- `playing`, with the
++`engine` playing it, which need not be the library's -- or `"playing": null`
++with nothing playing:
++
++```json
++{"schema": 1, "trigger": "locate", "on": "hand", …,
++ "playing": {"path": "/srv/music/Low/01 Low.flac", "relative_path": "Low/01 Low.flac",
++             "title": "Low", …, "engine": {"name": "nas", "address": "nas:6601", "here": false}}}
++```
++
++An entry under Workspace › Run is a command in the palette too, so a
++command about what plays is a trigger run by hand.
++
+ One run of a trigger at a time: started again while it runs, it runs once
+ more after. Triggers run while Melody does; for the window closed, use
+ `melody-cli watch albums` or cron.
+diff --git a/plugins/README.md b/plugins/README.md
+index b47f94f9..75634a6d 100644
+--- a/plugins/README.md
++++ b/plugins/README.md
+@@ -14,4 +14,5 @@ together's server is melody-together, which is part of Melody.
+ | [`lrclib`](lrclib) | Lyrics from lrclib.net, synced where it has them, when the files have none -- kept a month. |
+ | [`about`](about) | A panel about the playing artist and album: the artist's photo, Wikipedia's summaries, where and since when, the album's date, kind and label, and links -- to Discogs, Bandcamp, Rate Your Music and AllMusic too -- from MusicBrainz, Wikidata and Wikipedia, kept a week. Either half can be turned off. Beneath them, the artist's albums missing from the library, from MusicBrainz -- or Discogs, with a token. |
+ | [`together`](together) | Listen along with friends (ADR-0302): host a room on your melody-together server, or join one with an invite, from Workspace › Run; a panel shows what plays, who listens and the invite. |
++| [`locate`](locate) | The playing track's file -- from Workspace › Run or the command palette -- or the tracks chosen, shown in the file manager: the system's (Finder on macOS, the file selected), Tandem, or a command of your own; an engine's music folder mapped to where it is mounted here. |
+ | [`scripts`](scripts) | Your own shell commands, run for each new album, when the library changed, every so many minutes, when Melody starts, or by hand from Workspace › Run. |
+diff --git a/plugins/locate/locate b/plugins/locate/locate
+new file mode 100755
+index 00000000..078b7926
+--- /dev/null
++++ b/plugins/locate/locate
+@@ -0,0 +1,131 @@
++#!/usr/bin/env python3
++# SPDX-License-Identifier: GPL-3.0-only
++"""Melody plugin (ADR-0288, ADR-0295): a track's file, shown in a file manager.
++
++Run from a track list's menu, it shows the tracks chosen -- the first of each
++folder; from Workspace › Run, the playing track. The file manager is a
++setting: the system's (Finder on macOS, the file selected; elsewhere the
++desktop's, through org.freedesktop.FileManager1 where it answers), Tandem,
++or a command of the user's own, run with sh, {} the file and {folder} its
++folder. Paths are the engine's: for one on another computer, "folders" maps
++its music folder to where it is mounted here.
++"""
++import json
++import os
++import shlex
++import shutil
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++
++# At most so many folders shown for one choice: a window each.
++MOST_FOLDERS = 5
++
++
++class Refused(Exception):
++    pass
++
++
++def mapped(path, folders):
++    """The engine's path as it is on this computer."""
++    for pair in folders.split(";"):
++        there, sep, here = pair.partition("=")
++        there, here = there.strip().rstrip("/"), here.strip().rstrip("/")
++        if sep and there and here and (path == there or path.startswith(there + "/")):
++            return here + path[len(there):]
++    return path
++
++
++def run(argv):
++    """Starts a file manager; one that fails at once says why. One that
++    stays open is left to run when this exits."""
++    with tempfile.TemporaryFile() as said:
++        try:
++            started = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
++                                       stderr=said, start_new_session=True)
++        except OSError as error:
++            raise Refused("%s: %s" % (argv[0], error.strerror)) from None
++        try:
++            code = started.wait(timeout=3)
++        except subprocess.TimeoutExpired:
++            return
++        if code != 0:
++            said.seek(0)
++            lines = said.read().decode(errors="replace").strip().splitlines()
++            name = (argv[2].split() or [""])[0] if argv[:2] == ["sh", "-c"] else argv[0]
++            raise Refused("%s exited %d%s" % (name, code, ": " + lines[-1] if lines else ""))
++
++
++def show(path, settings):
++    folder = os.path.dirname(path)
++    manager = settings.get("manager") or "System default"
++    if manager == "My own command":
++        command = str(settings.get("command") or "").strip()
++        if not command:
++            raise Refused("No command is set: Settings › Plugins › Locate the file › My own command")
++        if "{}" in command or "{folder}" in command:
++            command = command.replace("{folder}", shlex.quote(folder)).replace("{}", shlex.quote(path))
++        else:
++            command += " " + shlex.quote(folder)
++        run(["sh", "-c", command])
++    elif manager == "Tandem":
++        if sys.platform == "darwin":
++            run(["open", "-a", "Tandem", folder])
++        elif shutil.which("tandem-fm"):
++            run(["tandem-fm", folder])
++        else:
++            raise Refused("Tandem is not installed: tandem-fm is not in PATH")
++    elif sys.platform == "darwin":
++        run(["open", "-R", path])
++    else:
++        # The desktop's file manager, the file selected where it can.
++        uri = Path(path).as_uri()
++        if shutil.which("gdbus") and subprocess.run(
++                ["gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1",
++                 "--object-path", "/org/freedesktop/FileManager1",
++                 "--method", "org.freedesktop.FileManager1.ShowItems", "['%s']" % uri, ""],
++                stdin=subprocess.DEVNULL, capture_output=True, timeout=10).returncode == 0:
++            return
++        run(["xdg-open", folder])
++
++
++def main():
++    given = json.load(sys.stdin)
++    settings = given.get("settings") or {}
++    folders = str(settings.get("folders") or "")
++    if "trigger" in given:
++        if "playing" not in given:
++            raise Refused("This Melody does not say what plays to a plugin run from the menu")
++        playing = given.get("playing")
++        if not playing or not playing.get("path"):
++            raise Refused("Nothing is playing")
++        engine = playing.get("engine") or {}
++        paths = [playing["path"]]
++    else:
++        engine = given.get("engine") or {}
++        paths = [track.get("path", "") for album in given.get("albums") or []
++                 for track in album.get("tracks") or []]
++    # The first of each folder, in the order chosen.
++    seen = {}
++    for path in filter(None, paths):
++        seen.setdefault(os.path.dirname(path), path)
++    if not seen:
++        raise Refused("No file was chosen")
++    for path in list(seen.values())[:MOST_FOLDERS]:
++        here = mapped(path, folders)
++        if not os.path.exists(here):
++            where = "" if engine.get("here", True) else " on %s" % (engine.get("name") or engine.get("address") or "the engine")
++            hint = "" if engine.get("here", True) else \
++                ": mount its music folder, or set Music folder here in the plugin's settings"
++            raise Refused("%s%s is not on this computer%s" % (here, where, hint))
++        show(here, settings)
++    return 0
++
++
++if __name__ == "__main__":
++    try:
++        sys.exit(main())
++    except Refused as why:
++        print(why, file=sys.stderr)
++        sys.exit(1)
+diff --git a/plugins/locate/plugin.json b/plugins/locate/plugin.json
+new file mode 100644
+index 00000000..be6d5932
+--- /dev/null
++++ b/plugins/locate/plugin.json
+@@ -0,0 +1,22 @@
++{
++  "schema": 1,
++  "name": "Locate the file",
++  "description": "Shows the playing track's file, or the tracks chosen, in Finder, Tandem or your own file manager",
++  "actions": [
++    {"id": "chosen", "label": "Locate the file", "for": "tracks", "run": ["./locate"],
++     "result": "none", "timeout": 30}
++  ],
++  "triggers": [
++    {"id": "playing", "label": "Locate the playing file", "on": "hand", "run": ["./locate"],
++     "timeout": 30}
++  ],
++  "settings": [
++    {"key": "manager", "label": "Open in", "kind": "choice",
++     "choices": ["System default", "Tandem", "My own command"],
++     "help": "System default: Finder on macOS, the file chosen; elsewhere the desktop's file manager. Tandem: its folder in Tandem."},
++    {"key": "command", "label": "My own command",
++     "help": "Run with sh when Open in is My own command: {} is the file, {folder} its folder, and without either the folder is added at the end, as open -a ForkLift {folder}"},
++    {"key": "folders", "label": "Music folder here",
++     "help": "Only for an engine on another computer whose music folder is somewhere else here: its folder = this computer's, as /srv/music=/Volumes/music; several separated by ;"}
++  ]
++}
+diff --git a/src/bench/bench_main_window.hpp b/src/bench/bench_main_window.hpp
+index 4df834f1..8d3d0282 100644
+--- a/src/bench/bench_main_window.hpp
++++ b/src/bench/bench_main_window.hpp
+@@ -484,14 +484,7 @@ class BenchMainWindow final : public QMainWindow, public WorkspaceView {
+     void tabOpenSidePanels();
+     void refreshPluginPanels(const EnginePlayback::State& state);
+     void askPluginPanel(PluginPanelDock& slot);
+-    // What a plugin is told of what plays: the track, its length, the
+-    // engine playing it and that engine's music folders.
+-    struct PluginPlaying {
+-        PluginTrack track;
+-        std::optional<std::int64_t> duration_ms;
+-        PluginEngine engine;
+-        std::vector<std::string> music_folders;
+-    };
++    // What a plugin is told of what plays.
+     [[nodiscard]] PluginPlaying pluginPlaying(const EnginePlayback::State& state);
+     void showPluginPanelSubject(PluginPanelDock& slot, const PluginTrack& playing);
+     // Runs the panel's program on what plays; its answer drawn unless
+diff --git a/src/bench/bench_plugin_triggers.cpp b/src/bench/bench_plugin_triggers.cpp
+index 496b6ff6..c207679e 100644
+--- a/src/bench/bench_plugin_triggers.cpp
++++ b/src/bench/bench_plugin_triggers.cpp
+@@ -175,10 +175,16 @@ void BenchMainWindow::runPluginTrigger(PluginTriggerRun& slot, const PluginTrigg
+                                          .track_number = {}});
+         }
+     }
++    const bool by_hand = when == PluginTrigger::When::hand;
++    // Run by hand: told what plays, as a panel is.
++    std::optional<PluginPlaying> playing;
++    if (const auto& state = plugin_panel_state_;
++        by_hand && state.status != QStringLiteral("stopped") && !state.entry.isEmpty()) {
++        playing = pluginPlaying(state);
++    }
+     const auto input =
+         pluginTriggerInput(slot.trigger, when, told, pluginAlbums(std::move(tracks), music_folders),
+-                           music_folders, pluginSettings(slot.plugin));
+-    const bool by_hand = when == PluginTrigger::When::hand;
++                           music_folders, pluginSettings(slot.plugin), playing);
+     const auto label = slot.trigger.label.isEmpty() ? slot.plugin.title : slot.trigger.label;
+     if (by_hand) {
+         showMessage(QStringLiteral("%1…").arg(label), 0);
+diff --git a/src/bench/bench_plugins.cpp b/src/bench/bench_plugins.cpp
+index c7444a09..2407d4b3 100644
+--- a/src/bench/bench_plugins.cpp
++++ b/src/bench/bench_plugins.cpp
+@@ -437,7 +437,7 @@ void BenchMainWindow::showPluginPanelOutcome(PluginPanelDock& slot, QObject* con
+     }
+ }
+ 
+-BenchMainWindow::PluginPlaying BenchMainWindow::pluginPlaying(const EnginePlayback::State& state) {
++PluginPlaying BenchMainWindow::pluginPlaying(const EnginePlayback::State& state) {
+     PluginPlaying told{.track = PluginTrack{.path = state.path.toStdString(),
+                                             .title = {},
+                                             .artist = {},
+diff --git a/src/workspace/plugins.cpp b/src/workspace/plugins.cpp
+index 4e0b11b0..43a99af3 100644
+--- a/src/workspace/plugins.cpp
++++ b/src/workspace/plugins.cpp
+@@ -1092,26 +1092,6 @@ QByteArray pluginInput(const PluginAction& action, const PluginEngine& engine,
+     return QJsonDocument{input}.toJson(QJsonDocument::Compact);
+ }
+ 
+-QByteArray pluginTriggerInput(const PluginTrigger& trigger, const PluginTrigger::When when,
+-                              const PluginEngine& engine, const std::vector<PluginAlbum>& albums,
+-                              const std::vector<std::string>& music_folders,
+-                              const QJsonObject& settings) {
+-    QJsonArray folders;
+-    for (const auto& folder : music_folders) {
+-        folders.push_back(text(folder));
+-    }
+-    QJsonObject input{{QStringLiteral("schema"), input_schema},
+-                      {QStringLiteral("trigger"), trigger.id},
+-                      {QStringLiteral("on"), pluginTriggerWhenName(when)},
+-                      {QStringLiteral("engine"), engineOf(engine)},
+-                      {QStringLiteral("music_folders"), folders},
+-                      {QStringLiteral("settings"), settings}};
+-    if (when == PluginTrigger::When::albums_added) {
+-        input.insert(QStringLiteral("albums"), albumsJson(albums, music_folders));
+-    }
+-    return QJsonDocument{input}.toJson(QJsonDocument::Compact);
+-}
+-
+ namespace {
+ 
+ [[nodiscard]] QJsonObject playingJson(const PluginTrack& playing,
+@@ -1140,6 +1120,38 @@ namespace {
+ 
+ } // namespace
+ 
++QByteArray pluginTriggerInput(const PluginTrigger& trigger, const PluginTrigger::When when,
++                              const PluginEngine& engine, const std::vector<PluginAlbum>& albums,
++                              const std::vector<std::string>& music_folders,
++                              const QJsonObject& settings,
++                              const std::optional<PluginPlaying>& playing) {
++    QJsonArray folders;
++    for (const auto& folder : music_folders) {
++        folders.push_back(text(folder));
++    }
++    QJsonObject input{{QStringLiteral("schema"), input_schema},
++                      {QStringLiteral("trigger"), trigger.id},
++                      {QStringLiteral("on"), pluginTriggerWhenName(when)},
++                      {QStringLiteral("engine"), engineOf(engine)},
++                      {QStringLiteral("music_folders"), folders},
++                      {QStringLiteral("settings"), settings}};
++    if (when == PluginTrigger::When::albums_added) {
++        input.insert(QStringLiteral("albums"), albumsJson(albums, music_folders));
++    }
++    // Asked from the menu, it may be about what plays -- on the engine
++    // playing it, which need not be the library's.
++    if (when == PluginTrigger::When::hand) {
++        QJsonValue told{QJsonValue::Null};
++        if (playing) {
++            auto object = playingJson(playing->track, playing->duration_ms, playing->music_folders);
++            object.insert(QStringLiteral("engine"), engineJson(playing->engine));
++            told = object;
++        }
++        input.insert(QStringLiteral("playing"), told);
++    }
++    return QJsonDocument{input}.toJson(QJsonDocument::Compact);
++}
++
+ namespace {
+ 
+ [[nodiscard]] QJsonObject tagsJson(const PluginTags& tags) {
+diff --git a/src/workspace/plugins.hpp b/src/workspace/plugins.hpp
+index 3dfa162c..60109558 100644
+--- a/src/workspace/plugins.hpp
++++ b/src/workspace/plugins.hpp
+@@ -180,6 +180,15 @@ struct PluginEngine {
+     bool here{true};
+ };
+ 
++// What plays: the track, its length, the engine playing it and that
++// engine's music folders.
++struct PluginPlaying {
++    PluginTrack track;
++    std::optional<std::int64_t> duration_ms;
++    PluginEngine engine;
++    std::vector<std::string> music_folders;
++};
++
+ // The tracks as albums -- by album artist, album and date, else by folder --
+ // each with its folder and that folder relative to the music folder it is
+ // in. Pure, for tests.
+@@ -202,13 +211,15 @@ struct PluginAlbum {
+                                      const QJsonObject& settings = {});
+ 
+ // The JSON a trigger's run is given: what started it, the engine holding the
+-// library, its music folders, the plugin's settings -- and, for albums come
+-// in, the albums, as an action is given them.
++// library, its music folders, the plugin's settings -- for albums come in,
++// the albums, as an action is given them; run by hand, what plays, null
++// when nothing does.
+ [[nodiscard]] QByteArray pluginTriggerInput(const PluginTrigger& trigger, PluginTrigger::When when,
+                                             const PluginEngine& engine,
+                                             const std::vector<PluginAlbum>& albums,
+                                             const std::vector<std::string>& music_folders,
+-                                            const QJsonObject& settings);
++                                            const QJsonObject& settings,
++                                            const std::optional<PluginPlaying>& playing = {});
+ 
+ // What a `list` action answers: a heading and rows, each of text, a detail
+ // and a link -- the parts Melody draws, none of the plugin's own.
+diff --git a/tests/bench_main_window_test_2.cpp b/tests/bench_main_window_test_2.cpp
+index bd350580..d9f00080 100644
+--- a/tests/bench_main_window_test_2.cpp
++++ b/tests/bench_main_window_test_2.cpp
+@@ -4185,8 +4185,9 @@ void BenchMainWindowTest::manyPluginActionsGoInASubmenu() {
+ }
+ 
+ // ADR-0295: a plugin's triggers -- at start, by hand from Workspace › Run,
+-// when the library has changed and been still, for new albums -- one run of
+-// each at a time, asked again while it runs, once more after.
++// told what plays, when the library has changed and been still, for new
++// albums -- one run of each at a time, asked again while it runs, once more
++// after.
+ void BenchMainWindowTest::pluginTriggersRunOnTheLibrarysNews() {
+     QTemporaryDir out;
+     QVERIFY(out.isValid());
+@@ -4206,7 +4207,8 @@ void BenchMainWindowTest::pluginTriggersRunOnTheLibrarysNews() {
+ input=$(cat)
+ on=$(printf '%s' "$input" | grep -o '"on":"[^"]*"' | cut -d '"' -f 4)
+ folders=$(printf '%s' "$input" | grep -o '"folder":"[^"]*"' | cut -d '"' -f 4 | tr '\n' ' ')
+-echo "$on $folders" >> '%1'
++playing=$(printf '%s' "$input" | grep -o '"playing":{.*' | grep -o '"path":"[^"]*"' | head -n 1 | cut -d '"' -f 4)
++echo "$on $folders$playing" >> '%1'
+ [ "$on" = library-changed ] && sleep 1
+ exit 0
+ )sh")
+@@ -4244,16 +4246,26 @@ exit 0
+     page->trigger();
+     QTRY_COMPARE(lines().size(), 2);
+     QCOMPARE(lines().back(), QStringLiteral("hand"));
++    // By hand while a track plays: told it, as a panel is.
++    window.transport_timer_->stop();
++    EnginePlayback::State playing;
++    playing.status = QStringLiteral("playing");
++    playing.entry = QStringLiteral("e1");
++    playing.path = QStringLiteral("/srv/music/A/B/02.flac");
++    window.refreshPluginPanels(playing);
++    page->trigger();
++    QTRY_COMPARE(lines().size(), 3);
++    QCOMPARE(lines().back(), QStringLiteral("hand /srv/music/A/B/02.flac"));
+ 
+     // The library changed, three times while it ran: once, and once after.
+     window.libraryChanged();
+-    QTRY_COMPARE(lines().size(), 3);
++    QTRY_COMPARE(lines().size(), 4);
+     window.libraryChanged();
+     window.libraryChanged();
+-    QTRY_COMPARE(lines().size(), 4);
++    QTRY_COMPARE(lines().size(), 5);
+     QTest::qWait(1'500);
+-    QCOMPARE(lines().size(), 4);
+-    QCOMPARE(lines().mid(2),
++    QCOMPARE(lines().size(), 5);
++    QCOMPARE(lines().mid(3),
+              (QStringList{QStringLiteral("library-changed"), QStringLiteral("library-changed")}));
+ 
+     // New albums, told with their folders.
+@@ -4262,7 +4274,7 @@ exit 0
+                                      .date = "1999",
+                                      .folder = "/srv/music/A/B",
+                                      .paths = {"/srv/music/A/B/01.flac"}}});
+-    QTRY_COMPARE(lines().size(), 5);
++    QTRY_COMPARE(lines().size(), 6);
+     QCOMPARE(lines().back(), QStringLiteral("albums-added /srv/music/A/B"));
+ 
+     // Turned off: its entry goes, and the menu with it.
+@@ -4272,7 +4284,7 @@ exit 0
+     QVERIFY(!menu->menuAction()->isVisible());
+     window.libraryChanged();
+     QTest::qWait(300);
+-    QCOMPARE(lines().size(), 5);
++    QCOMPARE(lines().size(), 6);
+ 
+     qunsetenv("MELODY_LIBRARY_SETTLE_SECONDS");
+     QSettings{}.remove(QStringLiteral("plugins"));
+diff --git a/tests/plugins_test.cpp b/tests/plugins_test.cpp
+index da77e36d..e853b552 100644
+--- a/tests/plugins_test.cpp
++++ b/tests/plugins_test.cpp
+@@ -40,6 +40,7 @@ class PluginsTest final : public QObject {
+     void providersAreReadAndTheirLyricsToo();
+     void triggersAreReadAndTold();
+     void theScriptsPluginRunsTheCommandsSet();
++    void theLocatePluginShowsTheFile();
+     void theTogetherPluginAsksTheEngine();
+ 
+   private:
+@@ -1448,6 +1449,137 @@ void PluginsTest::triggersAreReadAndTold() {
+                              .object();
+     QCOMPARE(by_hand.value(QStringLiteral("on")).toString(), QStringLiteral("hand"));
+     QVERIFY(!by_hand.contains(QStringLiteral("albums")));
++    // By hand, told what plays -- null with nothing playing -- on the engine
++    // playing it; started otherwise, not at all.
++    QVERIFY(by_hand.value(QStringLiteral("playing")).isNull());
++    QVERIFY(!told.contains(QStringLiteral("playing")));
++    const PluginPlaying playing{.track = PluginTrack{.path = "/srv/music/A/B/01.flac",
++                                                     .title = "One",
++                                                     .artist = "A",
++                                                     .album = "B",
++                                                     .album_artist = "A",
++                                                     .date = "1999",
++                                                     .track_number = "1"},
++                                .duration_ms = 250000,
++                                .engine = PluginEngine{.name = QStringLiteral("nas"),
++                                                       .address = QStringLiteral("nas:6601"),
++                                                       .here = false},
++                                .music_folders = {"/srv/music"}};
++    const auto while_playing =
++        QJsonDocument::fromJson(pluginTriggerInput(page, PluginTrigger::When::hand, PluginEngine{},
++                                                   {}, {}, {}, playing))
++            .object()
++            .value(QStringLiteral("playing"))
++            .toObject();
++    QCOMPARE(while_playing.value(QStringLiteral("path")).toString(),
++             QStringLiteral("/srv/music/A/B/01.flac"));
++    QCOMPARE(while_playing.value(QStringLiteral("relative_path")).toString(),
++             QStringLiteral("A/B/01.flac"));
++    QCOMPARE(while_playing.value(QStringLiteral("title")).toString(), QStringLiteral("One"));
++    QCOMPARE(while_playing.value(QStringLiteral("duration_ms")).toInteger(), 250000);
++    QCOMPARE(
++        while_playing.value(QStringLiteral("engine")).toObject().value(QStringLiteral("address")),
++        QJsonValue{QStringLiteral("nas:6601")});
++    QVERIFY(!QJsonDocument::fromJson(pluginTriggerInput(added, PluginTrigger::When::albums_added,
++                                                        PluginEngine{}, {}, {}, {}, playing))
++                 .object()
++                 .contains(QStringLiteral("playing")));
++}
++
++// The official Locate plugin: the chosen tracks' files -- the first of each
++// folder -- or, run by hand, the playing one, shown by the file manager set;
++// here a command of one's own that writes down what it was given. A path of
++// an engine elsewhere is mapped to where its music folder is here.
++void PluginsTest::theLocatePluginShowsTheFile() {
++    const QString folder = QStringLiteral(MELODY_SOURCE_DIR "/plugins/locate");
++    QFile manifest_file{folder + QStringLiteral("/plugin.json")};
++    QVERIFY(manifest_file.open(QIODevice::ReadOnly));
++    QString problem;
++    const auto locate = parsePluginManifest(manifest_file.readAll(), folder, &problem);
++    QVERIFY2(locate.has_value(), qPrintable(problem));
++    QCOMPARE(locate->actions.size(), std::size_t{1U});
++    QCOMPARE(locate->triggers.size(), std::size_t{1U});
++    const auto& action = locate->actions.front();
++    const auto& trigger = locate->triggers.front();
++
++    QTemporaryDir music;
++    QVERIFY(music.isValid());
++    const auto album = music.filePath(QStringLiteral("A/It's"));
++    writeFile(album + QStringLiteral("/01 One.flac"), {});
++    writeFile(album + QStringLiteral("/02 Two.flac"), {});
++    writeFile(music.filePath(QStringLiteral("C/D/01.flac")), {});
++    const auto said = music.filePath(QStringLiteral("said"));
++    const auto set = [&locate](const QString& key, const QString& value) {
++        QSettings{}.setValue(pluginSettingKey(locate->name, key), value);
++    };
++    set(QStringLiteral("manager"), QStringLiteral("My own command"));
++    set(QStringLiteral("command"),
++        QStringLiteral("printf '%s|%s\\n' {} {folder} >> '") + said + QStringLiteral("'"));
++    const auto saidLines = [&said] {
++        QFile lines{said};
++        const auto opened = lines.open(QIODevice::ReadOnly);
++        const auto text = opened ? QString::fromUtf8(lines.readAll()) : QString{};
++        lines.remove();
++        return text;
++    };
++    const auto track = [](const QString& path) {
++        return PluginTrack{.path = path.toStdString(),
++                           .title = {},
++                           .artist = {},
++                           .album = {},
++                           .album_artist = {},
++                           .date = {},
++                           .track_number = {}};
++    };
++
++    // Chosen: the first file of each folder.
++    const auto root = music.path().toStdString();
++    const auto chosen =
++        run(*locate, action,
++            pluginInput(action, PluginEngine{},
++                        pluginAlbums({track(album + QStringLiteral("/01 One.flac")),
++                                      track(album + QStringLiteral("/02 Two.flac")),
++                                      track(music.filePath(QStringLiteral("C/D/01.flac")))},
++                                     {root}),
++                        {root}, pluginSettings(*locate)));
++    QVERIFY2(chosen.succeeded, qPrintable(chosen.text));
++    QCOMPARE(saidLines().split(QLatin1Char('\n'), Qt::SkipEmptyParts),
++             (QStringList{album + QStringLiteral("/01 One.flac|") + album,
++                          music.filePath(QStringLiteral("C/D/01.flac|")) +
++                              music.filePath(QStringLiteral("C/D"))}));
++
++    // By hand: what plays, on an engine elsewhere, its folder mapped here.
++    set(QStringLiteral("folders"), QStringLiteral("/srv/music=") + music.path());
++    const PluginPlaying playing{.track = track(QStringLiteral("/srv/music/A/It's/02 Two.flac")),
++                                .duration_ms = {},
++                                .engine = PluginEngine{.name = QStringLiteral("nas"),
++                                                       .address = QStringLiteral("nas:6601"),
++                                                       .here = false},
++                                .music_folders = {"/srv/music"}};
++    const auto by_hand =
++        runTrigger(*locate, trigger,
++                   pluginTriggerInput(trigger, PluginTrigger::When::hand, PluginEngine{}, {}, {},
++                                      pluginSettings(*locate), playing));
++    QVERIFY2(by_hand.succeeded, qPrintable(by_hand.text));
++    QCOMPARE(saidLines(), album + QStringLiteral("/02 Two.flac|") + album + QStringLiteral("\n"));
++
++    // Nothing playing, or a file not here: it says so, and shows nothing.
++    const auto nothing =
++        runTrigger(*locate, trigger,
++                   pluginTriggerInput(trigger, PluginTrigger::When::hand, PluginEngine{}, {}, {},
++                                      pluginSettings(*locate)));
++    QVERIFY(!nothing.succeeded);
++    QCOMPARE(nothing.text, QStringLiteral("Nothing is playing"));
++    set(QStringLiteral("folders"), QString{});
++    const auto elsewhere =
++        runTrigger(*locate, trigger,
++                   pluginTriggerInput(trigger, PluginTrigger::When::hand, PluginEngine{}, {}, {},
++                                      pluginSettings(*locate), playing));
++    QVERIFY(!elsewhere.succeeded);
++    QVERIFY2(elsewhere.text.contains(QStringLiteral("on nas is not on this computer")),
++             qPrintable(elsewhere.text));
++    QVERIFY(!QFileInfo::exists(said));
++    QSettings{}.remove(QStringLiteral("plugins"));
+ }
+ 
+ // The official Scripts plugin: the command set for a trigger, run with sh,
+-- 
+2.55.0
+
