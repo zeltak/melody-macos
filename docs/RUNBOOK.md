@@ -116,7 +116,7 @@ Melody Engine. `scripts/install-mac.sh --help` has the details.
   up to date. Melody starts its own melodyd when it needs one.
 - **Melody's size** is Settings › General › Interface size (200% on the Mac
   Studio's 7680x2160 display, used at 1x), kept in Melody's own settings
-  and used from the next start (patch 0003). The LaunchAgent
+  and used from the next start. The LaunchAgent
   `org.melody.environment` that set `QT_SCALE_FACTOR` before that worked is
   moved aside by `install-mac.sh` where it is still installed.
 
@@ -135,9 +135,9 @@ Your own plugins there (library-export) are left alone.
 ### First time on a Mac
 
 - **Local Network.** The first time Melody opens, macOS asks whether it may
-  use the local network. Allow it. If the Library panel then says "the engine
-  at 192.168.1.111:6603 is unreachable", quit and reopen Melody: its first
-  connection was made before the answer.
+  use the local network. Allow it. The Library panel may say "the engine at
+  192.168.1.111:6603 is unreachable" for a few seconds: its first connection
+  was made before the answer, and it asks again once the window reconnects.
 - **Music folder.** The server's melodyd reads `/Volumes/media/imusic`. On
   2026-11-08 it could without asking. If macOS asks, it does so on the Mac
   mini's screen (Screen Sharing), and only once: melodyd is always signed
