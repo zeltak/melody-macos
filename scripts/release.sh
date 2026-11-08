@@ -5,7 +5,7 @@
 #
 #   1. on the build Mac -- the one with the oldest macOS the apps should run
 #      on, as Homebrew's libraries only run on the macOS they were built for
-#      and later -- build melody-next and assemble both apps;
+#      and later -- build melody-music and assemble both apps;
 #   2. here, where the signing certificate is, sign them;
 #   3. make dist/Melody-<BUILD>.dmg, and with --publish attach it to a GitHub
 #      release build-<BUILD>, which the menu-bar app updates from.
@@ -18,9 +18,9 @@
 
 set -euo pipefail
 
-build_host=${MELODY_BUILD_HOST:-192.168.1.111}
+build_host=${MELODY_BUILD_HOST:-local}
 ref=${MELODY_REF:-main}
-repo=${MELODY_REPO:-https://github.com/carnager/melody-next.git}
+repo=${MELODY_REPO:-https://github.com/carnager/melody-music.git}
 update_repository=${MELODY_UPDATE_REPOSITORY:-zeltak/melody-macos}
 publish=false
 
@@ -102,7 +102,7 @@ printf '==> %s (%s), Melody %s, build %s, macOS %s or later\n' \
 
 # --- 4. Publish ------------------------------------------------------------------
 if [[ $publish == true ]]; then
-    notes=$(printf 'Melody %s from melody-next %s.\n\nBoth apps in one DMG: drag Melody and/or Melody Engine to Applications. Melody Engine updates both itself.\n\nmacOS %s or later, Apple silicon.' \
+    notes=$(printf 'Melody %s from melody-music %s.\n\nBoth apps in one DMG: drag Melody and/or Melody Engine to Applications. Melody Engine updates both itself.\n\nmacOS %s or later, Apple silicon.' \
         "$VERSION" "${COMMIT:0:12}" "$minimum")
     gh release create "build-$BUILD" "$dmg" "$dmg.sha256" -R "$update_repository" \
         --title "Melody $VERSION (build $BUILD)" --notes "$notes"

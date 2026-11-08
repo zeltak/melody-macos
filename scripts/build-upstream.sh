@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Fetches melody-next at a ref and builds what the Mac apps carry: the Melody
+# Fetches melody-music at a ref and builds what the Mac apps carry: the Melody
 # window, melodyd, melody-agent and melody-cli -- optimised, without tests,
-# for macOS 26 and later (Homebrew's libraries need 26 themselves).
+# for the macOS this Mac runs and later (Homebrew's libraries need it
+# themselves; MELODY_MACOS_MINIMUM to say otherwise).
 #
 #   scripts/build-upstream.sh [--repo URL] [--ref REF]
 #
@@ -12,9 +13,10 @@
 
 set -euo pipefail
 
-repo=${MELODY_REPO:-https://github.com/carnager/melody-next.git}
+repo=${MELODY_REPO:-https://github.com/carnager/melody-music.git}
 ref=${MELODY_REF:-main}
 jobs=${MELODY_BUILD_JOBS:-$(sysctl -n hw.ncpu)}
+minimum=${MELODY_MACOS_MINIMUM:-$(sw_vers -productVersion | cut -d. -f1).0}
 
 while (($# > 0)); do
     case $1 in
@@ -55,7 +57,7 @@ cmake --preset macos -S "$source" -B "$build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTING=OFF \
     -DMELODY_WARNINGS_AS_ERRORS=OFF \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$minimum" \
     -DPKG_CONFIG_EXECUTABLE="$homebrew/bin/pkg-config"
 cmake --build "$build" --parallel "$jobs" \
     --target trackknife trackknife_engine_daemon melody_agent melody_cli
@@ -66,4 +68,4 @@ BUILD=$build_number
 COMMIT=$commit
 REPO=$repo
 EOF
-printf 'Built melody-next %s (%s, build %s)\n' "$version" "$commit" "$build_number"
+printf 'Built melody-music %s (%s, build %s)\n' "$version" "$commit" "$build_number"

@@ -14,17 +14,20 @@ struct Options {
     var socket = Engine.defaultSocketPath()
     var check = false
     var enableEngine = false
+    var openAtLogin = false
     var update = false
 }
 
 func usage() -> String {
     """
-    Usage: melody-engine [--socket PATH] [--check] [--enable-engine] [--update]
+    Usage: melody-engine [--socket PATH] [--check] [--enable-engine | --open-at-login] [--update]
 
       --socket PATH    melodyd's socket (default \(Engine.defaultSocketPath()))
       --check          say whether melodyd answers, and exit
       --enable-engine  run this bundle's melodyd at login, open this app at
                        login, and exit
+      --open-at-login  open this app at login (to keep both apps up to date),
+                       leaving melodyd to Melody, and exit
       --update         install the latest release if it is newer, and exit
       -h, --help       show this help
 
@@ -45,6 +48,7 @@ func parseOptions(_ arguments: [String]) -> Options {
             options.socket = arguments[index]
         case "--check": options.check = true
         case "--enable-engine": options.enableEngine = true
+        case "--open-at-login": options.openAtLogin = true
         case "--update": options.update = true
         case "-h", "--help":
             print(usage(), terminator: "")
@@ -403,6 +407,16 @@ if options.enableEngine {
     do {
         try enableEngine()
         print("melodyd runs at login from \(Paths.melodyd); Melody Engine opens at login")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("melody-engine: \(error)\n".utf8))
+        exit(1)
+    }
+}
+if options.openAtLogin {
+    do {
+        try System.installAgent(LaunchAgents.appDefinition(executable: Paths.app, logs: System.logs))
+        print("Melody Engine opens at login from \(Paths.app)")
         exit(0)
     } catch {
         FileHandle.standardError.write(Data("melody-engine: \(error)\n".utf8))

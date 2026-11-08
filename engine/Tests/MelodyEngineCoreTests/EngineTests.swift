@@ -163,6 +163,14 @@ final class UpdateTests: XCTestCase {
         XCTAssertNil(BuildNumber("0.3.0-12-gabc"))
     }
 
+    // The updater compares an update's LSMinimumSystemVersion with the
+    // running macOS the same way.
+    func testMacOSVersionsCompareAsBuildNumbers() {
+        XCTAssertFalse(BuildNumber("27.0.1")! < BuildNumber("27.0")!)
+        XCTAssertFalse(BuildNumber("27.0.0")! < BuildNumber("27.0")!)
+        XCTAssertLessThan(BuildNumber("26.6.2")!, BuildNumber("27.0")!)
+    }
+
     func testAReleaseNamesItsBuildAndDMG() throws {
         let json = """
         {"tag_name": "build-1230.4", "name": "Melody 0.3.0-300 (build 1230.4)",

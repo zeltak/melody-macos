@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
 // Releases of melody-macos on GitHub, as the menu-bar app reads them: each
-// is tagged build-<BUILD> -- melody-next's commit count, a dot, this
+// is tagged build-<BUILD> -- melody-music's commit count, a dot, this
 // repository's -- and carries one DMG holding both apps.
 
 import Foundation

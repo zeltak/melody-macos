@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# Publishes a release when there is something new: melody-next's main moved
+# Publishes a release when there is something new: melody-music's main moved
 # past the commit the latest release was built from, or melody-macos itself
 # changed. Otherwise does nothing. Run daily by the LaunchAgent that
 # scripts/install-nightly.sh installs.
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-repo=${MELODY_REPO:-https://github.com/carnager/melody-next.git}
+repo=${MELODY_REPO:-https://github.com/carnager/melody-music.git}
 ref=${MELODY_REF:-main}
 update_repository=${MELODY_UPDATE_REPOSITORY:-zeltak/melody-macos}
 force=false
@@ -30,12 +30,12 @@ latest=$(gh release view -R "$update_repository" --json tagName,body \
 released_packaging=$(sed -nE 's/^build-[0-9]+\.([0-9]+) .*/\1/p' <<<"$latest")
 
 if [[ $force == false && $latest == *"$upstream"* && $released_packaging == "$packaging" ]]; then
-    printf 'Nothing new: melody-next %s, melody-macos %s, already released (%s)\n' \
+    printf 'Nothing new: melody-music %s, melody-macos %s, already released (%s)\n' \
         "$upstream" "$packaging" "${latest%% *}"
     exit 0
 fi
 
-printf 'Releasing melody-next %s with melody-macos %s (latest: %s)\n' \
+printf 'Releasing melody-music %s with melody-macos %s (latest: %s)\n' \
     "$upstream" "$packaging" "${latest%% *}"
 scripts/release.sh --repo "$repo" --ref "$ref" --publish
 # Old DMGs: the last five are kept here; GitHub keeps every release.

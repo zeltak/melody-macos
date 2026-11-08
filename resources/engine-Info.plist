@@ -25,13 +25,19 @@
 	<key>MelodyCommit</key>
 	<string>@COMMIT@</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>26.0</string>
+	<string>@MINIMUM@</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>GPL-3.0-only. Source: @REPO@</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Melody's engine serves your music to the other Macs, phones and speakers on your local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_melody._tcp</string>
+	</array>
 	<key>MelodyUpdateRepository</key>
 	<string>@UPDATE_REPOSITORY@</string>
 </dict>

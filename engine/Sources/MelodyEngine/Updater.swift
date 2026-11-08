@@ -114,6 +114,13 @@ final class Updater {
         guard System.team(of: newEngineApp.path) == ourTeam else {
             throw Failure("Melody Engine.app in the update is not signed by the same team")
         }
+        // A build for a newer macOS than this one would not open: keep this.
+        let system = ProcessInfo.processInfo.operatingSystemVersion
+        let running = BuildNumber("\(system.majorVersion).\(system.minorVersion).\(system.patchVersion)")
+        if let minimum = Bundle(url: newEngineApp)?.infoDictionary?["LSMinimumSystemVersion"] as? String,
+           let needed = BuildNumber(minimum), let running, running < needed {
+            throw Failure("the update needs macOS \(minimum), this Mac runs \(running)")
+        }
         let newMelody = mount.appendingPathComponent("Melody.app")
         let installedMelody = ["/Applications/Melody.app",
                                (NSHomeDirectory() as NSString).appendingPathComponent("Applications/Melody.app")]

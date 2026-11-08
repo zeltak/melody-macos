@@ -1,5 +1,5 @@
 Melody @VERSION@ (build @BUILD@)
-melody-next @COMMIT@
+melody-music @COMMIT@
 macOS @MINIMUM@ or later, Apple silicon
 
 Two apps -- drag the ones this Mac needs to Applications:
@@ -25,5 +25,5 @@ Open, then Open again. Once is enough; updates do not ask again.
 The first time melodyd reads the music folder, macOS asks for permission.
 It is kept across updates.
 
-Source: https://github.com/carnager/melody-next (GPL-3.0-only); the licences
+Source: https://github.com/carnager/melody-music (GPL-3.0-only); the licences
 of everything inside are in each app's Contents/Resources/licenses.

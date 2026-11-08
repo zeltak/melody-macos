@@ -1,7 +1,7 @@
 # melody-macos
 
-Mac apps for [Melody](https://github.com/carnager/melody-next), built from
-melody-next unchanged and delivered as one DMG:
+Mac apps for [Melody](https://github.com/carnager/melody-music), built from
+melody-music unchanged and delivered as one DMG:
 
 | | **Melody.app** | **Melody Engine.app** |
 |---|---|---|
@@ -50,7 +50,7 @@ scripts/release.sh --build-host local --ref v0.3.0
 1. **Build on the oldest macOS.** Homebrew's libraries only run on the macOS
    they were built for and later, so the build host is the Mac with the
    oldest macOS the apps must run on (the Mac mini, macOS 26).
-   `build-upstream.sh` builds melody-next there (Release, no tests, macOS 26
+   `build-upstream.sh` builds melody-music there (Release, no tests, macOS 26
    deployment target); `assemble.sh` makes both apps, bundles Qt with
    `macdeployqt` and every other library with `bundle-libs.py`, and checks
    that nothing points outside the bundle.
@@ -59,8 +59,8 @@ scripts/release.sh --build-host local --ref v0.3.0
    (`MELODY_CODESIGN_IDENTITY` to choose).
 3. **Package.** One DMG with both apps, a link to Applications and a Read Me.
 
-The build number is `<melody-next commits>.<melody-macos commits>`; the
-version is melody-next's `git describe`.
+The build number is `<melody-music commits>.<melody-macos commits>`; the
+version is melody-music's `git describe`.
 
 Build host needs: Xcode, Homebrew with `qt`, `ffmpeg`, `taglib`, `libebur128`,
 `libupnp`, `curl`, `openssl@3`, `pkgconf`, `cmake`, `ninja`.
@@ -71,7 +71,7 @@ Build host needs: Xcode, Homebrew with `qt`, `ffmpeg`, `taglib`, `libebur128`,
 scripts/install-nightly.sh 04:30   # daily on this Mac; --remove to stop
 ```
 
-`nightly.sh` publishes a release only when melody-next's `main` moved past
+`nightly.sh` publishes a release only when melody-music's `main` moved past
 the commit the latest release was built from, or this repository changed. It
 runs on the Mac that has the signing certificate and builds on the build
 host over SSH. Every Melody Engine then updates within six hours.
@@ -90,5 +90,5 @@ cd engine && swift test
 
 ## License
 
-GPL-3.0-only, as melody-next. Each app carries the licences of everything
+GPL-3.0-only, as melody-music. Each app carries the licences of everything
 inside it in `Contents/Resources/licenses`.

@@ -37,7 +37,8 @@ mkdir -p "$apps"
 
 info_plist() {
     sed -e "s|@VERSION@|$VERSION|" -e "s|@BUILD@|$BUILD|" -e "s|@COMMIT@|$COMMIT|" \
-        -e "s|@REPO@|$REPO|" -e "s|@UPDATE_REPOSITORY@|$update_repository|" "$1" >"$2"
+        -e "s|@REPO@|$REPO|" -e "s|@UPDATE_REPOSITORY@|$update_repository|" \
+        -e "s|@MINIMUM@|$(sw_vers -productVersion | cut -d. -f1).0|" "$1" >"$2"
     plutil -lint "$2" >/dev/null
 }
 
@@ -63,6 +64,12 @@ helpers "$melody/Contents/MacOS"
 info_plist "$root/resources/melody-Info.plist" "$melody/Contents/Info.plist"
 "$root/scripts/make-icns.sh" "$melody/Contents/Resources/AppIcon.icns"
 licenses "$melody/Contents/Resources"
+# The official plugins, where Melody looks beside the program; a copy of one
+# in ~/Library/Application Support/melody/plugins is used instead.
+mkdir -p "$melody/Contents/share/melody"
+cp -R "$source/plugins" "$melody/Contents/share/melody/plugins"
+rm -f "$melody/Contents/share/melody/plugins/README.md"
+find "$melody/Contents/share" -name __pycache__ -prune -exec rm -rf {} +
 macdeployqt "$melody" \
     -executable="$melody/Contents/MacOS/melodyd" \
     -executable="$melody/Contents/MacOS/melody-agent" \
