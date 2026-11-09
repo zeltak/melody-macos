@@ -1,0 +1,456 @@
+From 0e145cdfa2b44f249d02a5c8b586aea49fc1e5f6 Mon Sep 17 00:00:00 2001
+From: ikloog <ikloog@gmail.com>
+Date: Mon, 9 Nov 2026 09:56:31 -0500
+Subject: [PATCH] Side panel tabs keep their order and the one in front
+
+Tabs dragged into another order are put in it again whenever the side
+panels are tabbed together -- the window opening, Panels showing them,
+the plugins' panels made again -- and the tab in front is brought back
+then. Settings > General > Panel in front can name one to be in front
+whenever the window opens instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ docs/adr/0292-one-panel-layout.md  |  19 ++++++
+ docs/feature-matrix.md             |   2 +-
+ docs/ui-workspace.md               |   3 +
+ src/bench/bench_lyrics.cpp         |  29 +++++++-
+ src/bench/bench_main_window.hpp    |  11 +++
+ src/bench/bench_plugins.cpp        | 106 +++++++++++++++++++++++++++++
+ src/bench/settings_dialog.cpp      |  22 ++++++
+ src/workspace/settings_session.cpp |   1 +
+ tests/bench_main_window_test.hpp   |   1 +
+ tests/bench_main_window_test_7.cpp |  95 ++++++++++++++++++++++++++
+ 10 files changed, 286 insertions(+), 3 deletions(-)
+
+diff --git a/docs/adr/0292-one-panel-layout.md b/docs/adr/0292-one-panel-layout.md
+index 8a591a6e..0563751d 100644
+--- a/docs/adr/0292-one-panel-layout.md
++++ b/docs/adr/0292-one-panel-layout.md
+@@ -42,3 +42,22 @@ Accepted, 2026-10-17. Replaces ADR-0026's composed panel layouts.
+   layout actions remain, a divider moved is where it was in the next
+   window; Up Next and Lyrics open together are two tabs, the last opened
+   in front, and the one left keeps its width when the other closes.
++
++## Amendment, 2026-11-09: the tabs keep their order and the one in front
++
++- **Their order.** The side panels' tabs can be dragged (Qt's dock tab
++  bars always could), but were tabbed again at every start in the order the
++  panels were made -- Lyrics, then each plugin's -- so an order dragged to
++  did not outlive the window. The order dragged to is kept
++  (`panels/order`, the panels' object names; one not in it goes last) and
++  the tabs are put in it whenever they are tabbed together: when the window
++  opens, when Panels brings them back, when the plugins' are made again.
++- **The one in front.** Which tab is in front is kept (`panels/front`)
++  and brought back then, rather than whichever was tabbed last. Settings ›
++  General › Panel in front chooses one to be in front whenever the window
++  opens instead (`panels/start`): Lyrics or an enabled plugin's panel.
++- `bench-main-window`: an order dragged to and the tab in front are as
++  they were in the next window, after Panels hides and shows them, and
++  after the plugins' panels are made again; the panel Settings chose is in
++  front in the next window; Settings offers Lyrics and the enabled
++  plugins' panels.
+diff --git a/docs/feature-matrix.md b/docs/feature-matrix.md
+index e58de690..1f874d01 100644
+--- a/docs/feature-matrix.md
++++ b/docs/feature-matrix.md
+@@ -47,7 +47,7 @@ retaining warnings and errors (covered by the `debug-log` regression test).
+ | Metadata service settings | Implemented | Settings → Metadata services exposes AcoustID application/client and Last.fm API keys with masked entry, registration links, Save/Cancel, and clearing (ADR-0195). AcoustID also has a reveal control. MusicBrainz text search remains credential-free; network lookups remain explicit. Settings pages scroll at smaller sizes and explain their save behavior (ADR-0185). |
+ | Committed search-result tabs | Implemented | ADR-0140: Enter in a library search keeps the current hits as a durable tab -- a list of that engine (persists and plays) resolved from the complete album+track match set. ADR-0164 opens library/sidebar and standalone searches from cached tags and technicals without file discovery, with independent album-cover loading; grouped scroll ranges include every album header. |
+ | Track-view layouts | Implemented | ADR-0282: list views. A view is a name, its artwork (beside, in the header, none), its columns -- the built-in ones and `tkfmt-1` expression columns with their own sort expression, alignment and spare-room share -- and its grouping: none, the album, or an expression grouping with a header (title and details, reading `group_tracks` and `group_length`) and subgroups shown where a group has several. Two views ship read-only -- Albums with side artwork, Plain columns; changing one from the header makes a copy, and views once shipped and retired open as the one in their place. A tab is drawn by a view and keeps its own widths; views live in Settings. Expressions are evaluated off the window's thread and kept with the rows (100,000 rows in 83 ms, release). A column's header click sorts the list by it, as an undoable edit; again, descending. An editor with per-expression errors and a live preview makes and changes them. Layouts from before views migrate to their presentation's view, or a "(customised)" copy. Listening history is read by expressions too (`playcount`, `lastplayed`, `dayssinceplayed` and the album's), asked of the list's engine for the whole list; the engine says when it records a listen (`catalogue.listened`, level 11). ADR-0283: rows say when they came into the library (`added`, `dayssinceadded` and the album's; protocol level 12), groups fold to their headers (kept with the tab), and style expressions -- the row's and each expression cell's -- answer `quiet`, `accent`, `warning`, `bold`, `italic`. ADR-0284: a view's rows may have two or three lines, each column -- built in or not -- a second-line expression drawn beneath it, smaller; every row of a view the same height, so lists stay fast; Two-line tracks ships beside the two views. ADR-0285: every column is an expression -- built-in columns show theirs in the editor (`%artist%`, `%length%`) and take a header, display, sort, style and alignment of the view's, keeping their playing mark, rating clicks and own sorting; Plain columns ships with a two-digit number, the year and right-aligned numbers through them. Tested in `list-view`, `track-description`, `track-view-layout`, `bench-main-window`. |
+-| Workspace arrangement | Implemented | One layout: the sources left, the lists right, the divider kept where it was left; Up Next under the lists, its height kept (ADR-0294); the reading panels -- Lyrics, plugin panels -- open together on a side share it as tabs, the last opened in front, and Panels in the header hides them all and brings the same back (ADRs 0292, 0294, replacing ADR-0026's composed layouts; tested in `bench-main-window`). |
++| Workspace arrangement | Implemented | One layout: the sources left, the lists right, the divider kept where it was left; Up Next under the lists, its height kept (ADR-0294); the reading panels -- Lyrics, plugin panels -- open together on a side share it as tabs, the last opened in front -- in the order their tabs were dragged to, the one in front when the window closed (or the one Settings › General › Panel in front names) in front when it opens again -- and Panels in the header hides them all and brings the same back (ADRs 0292, 0294, replacing ADR-0026's composed layouts; tested in `bench-main-window`). |
+ | Keyboard navigation | Implemented | Settings → Shortcuts edits and persists main-window bindings, detects duplicate/prefix conflicts, and restores defaults with Save/Cancel. Playback, Up Next, Follow playback, Jump to playing, file, search, and tab actions have defaults. Tab navigation, Home/End, selection keys, and keyboard context actions retain native behavior. |
+ | Command palette and shortcut editor | Implemented | Workspace → Commands… (`Ctrl+Shift+P`) searches every menu entry, submenus included and named under them, and the window's keyed actions; hides unavailable commands, shows right-aligned shortcuts, and runs the existing action (ADR-0205, ADR-0345). Workspace → Library engine chooses which engine holds the one library; Playback → Output picks speaker and device. Settings → Shortcuts owns binding changes, conflict validation, and default restoration. |
+ | Rows whose files are gone | Implemented | A list's rows whose files are not there show greyed and in italics, said in their tooltip. The list's engine looks where the files are (`files.missing`) when the list gains rows, and again for the rows its library changes name; a file that comes back shows as any other (ADR-0268, tested in `bench-main-window`). The rows stay. Rows whose files changed -- another tagger, another window -- are described again by their engine, so their tags follow; the tag editor reads every file on opening, and a file changed before Apply is read again with the draft kept. |
+diff --git a/docs/ui-workspace.md b/docs/ui-workspace.md
+index 9c5d196e..46d39d28 100644
+--- a/docs/ui-workspace.md
++++ b/docs/ui-workspace.md
+@@ -216,6 +216,9 @@ right, the divider kept where it was left. Up Next is a section under the
+ lists, its height kept (ADR-0294). The side panels -- Lyrics, a plugin's --
+ are docks beside it; open together on one side they share it as tabs, the
+ last opened in front, and Panels in the header hides or brings them all.
++Tabs dragged into another order keep it, and the one in front is in front
++again in the next window -- or the one Settings › General › Panel in front
++names.
+ There is no layout editor: ADR-0026's composed layouts are gone.
+ 
+ Every panel has:
+diff --git a/src/bench/bench_lyrics.cpp b/src/bench/bench_lyrics.cpp
+index 588129b6..aa10e7f7 100644
+--- a/src/bench/bench_lyrics.cpp
++++ b/src/bench/bench_lyrics.cpp
+@@ -48,11 +48,27 @@ void BenchMainWindow::buildLyrics() {
+     connect(panels, &QAction::triggered, this, &BenchMainWindow::togglePanels);
+     addAction(panels);
+     watchSidePanel(lyrics_dock_);
++
++    // The one in front kept, for the next window -- not those brought there
++    // while the panels are made and tabbed.
++    const QSettings settings;
++    side_panel_front_ = settings.value(QStringLiteral("panels/start")).toString();
++    if (side_panel_front_.isEmpty()) {
++        side_panel_front_ = settings.value(QStringLiteral("panels/front")).toString();
++    }
++    connect(this, &QMainWindow::tabifiedDockWidgetActivated, this, [this](QDockWidget* dock) {
++        if (!arranging_side_panels_ && side_panel_front_.isEmpty() &&
++            dynamic_cast<AnimatedPanelDock*>(dock) != nullptr) {
++            QSettings{}.setValue(QStringLiteral("panels/front"), dock->objectName());
++        }
++    });
+ }
+ 
+ void BenchMainWindow::watchSidePanel(QDockWidget* dock) {
+-    connect(dock, &QDockWidget::visibilityChanged, this,
+-            [this] { QTimer::singleShot(0, this, &BenchMainWindow::refreshPanelsButton); });
++    connect(dock, &QDockWidget::visibilityChanged, this, [this] {
++        QTimer::singleShot(0, this, &BenchMainWindow::refreshPanelsButton);
++        QTimer::singleShot(0, this, &BenchMainWindow::arrangeSidePanelTabs);
++    });
+ }
+ 
+ void BenchMainWindow::refreshPanelsButton() {
+@@ -84,12 +100,21 @@ void BenchMainWindow::togglePanels() {
+     const bool shown = std::ranges::any_of(
+         panels, [](const AnimatedPanelDock* panel) { return panel->isVisible(); });
+     QSettings{}.setValue(QStringLiteral("panels/shown"), !shown);
++    // Tabs going one after another bring the rest to the front in turn:
++    // not the one in front, kept.
++    arranging_side_panels_ = true;
+     for (auto* panel : panels) {
+         if (panel->isVisible() == shown) {
+             panel->setVisible(!shown);
+         }
+     }
++    arranging_side_panels_ = false;
+     if (!shown) {
++        // Each comes to the front as it shows: the one in front before is
++        // brought back once they all have.
++        if (side_panel_front_.isEmpty()) {
++            side_panel_front_ = QSettings{}.value(QStringLiteral("panels/front")).toString();
++        }
+         QTimer::singleShot(0, this, &BenchMainWindow::tabOpenSidePanels);
+         // In sight again: each asked about what plays now.
+         refreshLyrics(plugin_panel_state_);
+diff --git a/src/bench/bench_main_window.hpp b/src/bench/bench_main_window.hpp
+index 4df834f1..906f9993 100644
+--- a/src/bench/bench_main_window.hpp
++++ b/src/bench/bench_main_window.hpp
+@@ -482,6 +482,17 @@ class BenchMainWindow final : public QMainWindow, public WorkspaceView {
+     // after the window opens with those open before, and after the
+     // plugins' are made again.
+     void tabOpenSidePanels();
++    // The side panels' tabs in the order they were dragged to
++    // (`panels/order`), and in front the one Settings chose
++    // (`panels/start`), else the one in front when the window closed
++    // (`panels/front`) -- after the window opens, Panels shows them again,
++    // or the plugins' are made again.
++    void arrangeSidePanelTabs();
++    void keepSidePanelOrder(const QTabBar* bar);
++    bool arranging_side_panels_{false};
++    // The panel to bring to the front once the panels show; until then
++    // which comes to the front is not kept.
++    QString side_panel_front_;
+     void refreshPluginPanels(const EnginePlayback::State& state);
+     void askPluginPanel(PluginPanelDock& slot);
+     // What a plugin is told of what plays: the track, its length, the
+diff --git a/src/bench/bench_plugins.cpp b/src/bench/bench_plugins.cpp
+index c7444a09..4a4150a3 100644
+--- a/src/bench/bench_plugins.cpp
++++ b/src/bench/bench_plugins.cpp
+@@ -20,8 +20,10 @@
+ #include <QPointer>
+ #include <QSettings>
+ #include <QStatusBar>
++#include <QTabBar>
+ #include <QTimer>
+ 
++#include <algorithm>
+ #include <memory>
+ 
+ namespace trackknife::bench {
+@@ -180,6 +182,11 @@ void BenchMainWindow::addLibraryPluginActions(LocalLibraryPanel* panel, const En
+ }
+ 
+ void BenchMainWindow::buildPluginPanels() {
++    // Gone and made again, each brings another to the front: the one in
++    // front before is brought back once they all are there.
++    if (side_panel_front_.isEmpty()) {
++        side_panel_front_ = QSettings{}.value(QStringLiteral("panels/front")).toString();
++    }
+     // Open before, open after: a panel made again is not one closed.
+     QSet<QString> open;
+     for (auto& slot : plugin_panels_) {
+@@ -267,6 +274,105 @@ void BenchMainWindow::tabOpenSidePanels() {
+             }
+         }
+     }
++    arrangeSidePanelTabs();
++}
++
++namespace {
++
++// The side panels a tab bar of the window's shows, in its order: Qt keeps a
++// tab bar for each group of docks tabbed together, each tab's data the dock
++// it stands for. Empty for any other tab bar, and for one left over.
++QList<QDockWidget*> sidePanelTabs(const QMainWindow* window, const QTabBar* bar) {
++    QList<QDockWidget*> tabs;
++    const auto docks = window->findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly);
++    for (int index = 0; index < bar->count(); ++index) {
++        const auto id = bar->tabData(index).value<quintptr>();
++        const auto dock = std::ranges::find_if(docks, [id](const QDockWidget* dock) {
++            return reinterpret_cast<quintptr>(dock) == id &&
++                   dynamic_cast<const AnimatedPanelDock*>(dock) != nullptr;
++        });
++        if (dock == docks.end()) {
++            return {};
++        }
++        tabs.push_back(*dock);
++    }
++    return tabs;
++}
++
++} // namespace
++
++void BenchMainWindow::arrangeSidePanelTabs() {
++    // A tab bar Qt makes when the window is next laid out.
++    if (auto* layout = this->layout(); layout != nullptr) {
++        layout->activate();
++    }
++    arranging_side_panels_ = true;
++    const auto order = QSettings{}.value(QStringLiteral("panels/order")).toStringList();
++    const auto rank = [&order](const QDockWidget* dock) {
++        const auto at = order.indexOf(dock->objectName());
++        return at < 0 ? order.size() : at;
++    };
++    for (auto* bar : findChildren<QTabBar*>(Qt::FindDirectChildrenOnly)) {
++        auto tabs = sidePanelTabs(this, bar);
++        if (tabs.isEmpty()) {
++            continue;
++        }
++        if (!bar->property("bench-side-panels").toBool()) {
++            bar->setProperty("bench-side-panels", true);
++            connect(bar, &QTabBar::tabMoved, this, [this, bar] {
++                if (!arranging_side_panels_) {
++                    keepSidePanelOrder(bar);
++                }
++            });
++        }
++        // Moved on the bar, as a drag moves them: Qt's layout follows.
++        auto wanted = tabs;
++        std::ranges::stable_sort(wanted, {}, rank);
++        for (qsizetype index = 0; index < wanted.size(); ++index) {
++            const auto at = sidePanelTabs(this, bar).indexOf(wanted[index]);
++            if (at >= 0 && at != index) {
++                bar->moveTab(static_cast<int>(at), static_cast<int>(index));
++            }
++        }
++    }
++    if (!side_panel_front_.isEmpty()) {
++        const auto docks = findChildren<QDockWidget*>(Qt::FindDirectChildrenOnly);
++        if (std::ranges::any_of(docks, [](const QDockWidget* dock) {
++                return dynamic_cast<const AnimatedPanelDock*>(dock) != nullptr && dock->isVisible();
++            })) {
++            if (auto* front = findChild<QDockWidget*>(side_panel_front_);
++                front != nullptr && front->isVisible()) {
++                // And again once what is queued has run: a panel joining
++                // the tabs comes to the front then too.
++                front->raise();
++                QTimer::singleShot(0, front, [front] { front->raise(); });
++            }
++            side_panel_front_.clear();
++        }
++    }
++    arranging_side_panels_ = false;
++}
++
++void BenchMainWindow::keepSidePanelOrder(const QTabBar* bar) {
++    QStringList shown;
++    for (const auto* dock : sidePanelTabs(this, bar)) {
++        shown << dock->objectName();
++    }
++    if (shown.isEmpty()) {
++        return;
++    }
++    // The tabs on this bar take the places they had among all the panels
++    // ever ordered, in their new order; those not on it keep theirs.
++    QSettings settings;
++    QStringList order;
++    qsizetype next = 0;
++    for (const auto& name : settings.value(QStringLiteral("panels/order")).toStringList()) {
++        order << (shown.contains(name) ? shown.at(next++) : name);
++    }
++    for (; next < shown.size(); ++next) {
++        order << shown.at(next);
++    }
++    settings.setValue(QStringLiteral("panels/order"), order);
+ }
+ 
+ void BenchMainWindow::refreshPluginPanels(const EnginePlayback::State& state) {
+diff --git a/src/bench/settings_dialog.cpp b/src/bench/settings_dialog.cpp
+index 73de8ad8..6d4a32bd 100644
+--- a/src/bench/settings_dialog.cpp
++++ b/src/bench/settings_dialog.cpp
+@@ -199,6 +199,28 @@ SettingsDialog::SettingsDialog(QWidget* parent, OutputProfileStore profile_store
+     panel_animations_->setObjectName(QStringLiteral("bench-settings-panel-animations"));
+     bind(panel_animations_, "appearance/panel-animations");
+     general_form->addRow(QStringLiteral("Appearance:"), panel_animations_);
++    // The side panel in front when Melody opens: as it was left, or always
++    // the same -- Lyrics or an enabled plugin's.
++    auto* front_panel = new QComboBox(general);
++    front_panel->setObjectName(QStringLiteral("bench-settings-front-panel"));
++    front_panel->setToolTip(
++        QStringLiteral("Which of the side panels is in front when Melody opens. Drag their tabs to "
++                       "order them; the order is kept."));
++    std::vector<SettingsSession::Choice> fronts{
++        {.label = QStringLiteral("The one in front when Melody closed"), .value = QString{}},
++        {.label = QStringLiteral("Lyrics"), .value = QStringLiteral("bench-lyrics")}};
++    for (const auto& found : discoverPlugins()) {
++        if (!found.plugin || !pluginEnabled(found.name)) {
++            continue;
++        }
++        for (const auto& panel : found.plugin->panels) {
++            fronts.push_back(
++                {.label = panel.label,
++                 .value = QStringLiteral("bench-plugin-panel-%1-%2").arg(found.name, panel.id)});
++        }
++    }
++    bind(front_panel, fronts, "panels/start");
++    general_form->addRow(QStringLiteral("Panel in front:"), front_panel);
+     // An artist's initials in the library on a tile of the name's colour, as
+     // an album without a cover is drawn; off, a quiet grey one.
+     auto* coloured_initials =
+diff --git a/src/workspace/settings_session.cpp b/src/workspace/settings_session.cpp
+index dc1b7923..790ccb82 100644
+--- a/src/workspace/settings_session.cpp
++++ b/src/workspace/settings_session.cpp
+@@ -62,6 +62,7 @@ SettingsSession::SettingsSession(QObject* parent) : QObject(parent) {
+     read(notifications_key, false);
+     read(notifications_background_key, false);
+     read(panel_animations_key, true);
++    read(QStringLiteral("panels/start"), QString{});
+     read(coloured_initials_key, false);
+     read(QLatin1String(color_scheme_key), QStringLiteral("system"));
+     // As its choices hold it, so the combo shows what is chosen: unread, it
+diff --git a/tests/bench_main_window_test.hpp b/tests/bench_main_window_test.hpp
+index fe943bd4..3d22f113 100644
+--- a/tests/bench_main_window_test.hpp
++++ b/tests/bench_main_window_test.hpp
+@@ -527,6 +527,7 @@ class BenchMainWindowTest final : public QObject {
+     void theSourcesKeepTheirWidth();
+     void sidePanelsShareTheirRoomAsTabs();
+     void sidePanelsOpenBeforeAreTabsAgain();
++    void sidePanelTabsKeepTheirOrderAndFront();
+     void trackViewLayoutMatchesGroupedQueueAndPersists();
+     void listViewsShowExpressionsGroupAndSort();
+     void listViewEditorChecksAndSavesACopy();
+diff --git a/tests/bench_main_window_test_7.cpp b/tests/bench_main_window_test_7.cpp
+index 0dd460c6..efa4c662 100644
+--- a/tests/bench_main_window_test_7.cpp
++++ b/tests/bench_main_window_test_7.cpp
+@@ -674,6 +674,101 @@ void BenchMainWindowTest::sidePanelsOpenBeforeAreTabsAgain() {
+     QDir{folder}.removeRecursively();
+ }
+ 
++// ADR-0292 (amended 2026-11-09): side panel tabs dragged into another order
++// are in it in the next window, with the one in front then in front again --
++// or the one Settings chose.
++void BenchMainWindowTest::sidePanelTabsKeepTheirOrderAndFront() {
++    const auto folder = pluginFolders().value(0) + QStringLiteral("/side");
++    sidePanelPlugin(folder);
++    QSettings{}.setValue(pluginEnabledKey(QStringLiteral("side")), true);
++    QSettings{}.setValue(QStringLiteral("panels/shown"), true);
++    const auto lyrics_name = QStringLiteral("bench-lyrics");
++    const auto side_name = QStringLiteral("bench-plugin-panel-side-p");
++    // The tab bar of the two, and the panels' names in its order, the one
++    // in front first.
++    const auto tabs = [](BenchMainWindow& window) -> QStringList {
++        auto* lyrics = window.findChild<QDockWidget*>(QStringLiteral("bench-lyrics"));
++        for (auto* bar : window.findChildren<QTabBar*>(Qt::FindDirectChildrenOnly)) {
++            if (bar->count() != 2 || !bar->isVisible()) {
++                continue;
++            }
++            QStringList names;
++            for (int index = 0; index < bar->count(); ++index) {
++                for (auto* dock : window.findChildren<QDockWidget*>()) {
++                    if (reinterpret_cast<quintptr>(dock) == bar->tabData(index).value<quintptr>()) {
++                        names << dock->objectName();
++                    }
++                }
++            }
++            if (names.contains(lyrics->objectName())) {
++                return QStringList{names.value(bar->currentIndex())} + names;
++            }
++        }
++        return {};
++    };
++    const auto bar = [](BenchMainWindow& window) -> QTabBar* {
++        for (auto* bar : window.findChildren<QTabBar*>(Qt::FindDirectChildrenOnly)) {
++            if (bar->count() == 2 && bar->isVisible()) {
++                return bar;
++            }
++        }
++        return nullptr;
++    };
++    {
++        BenchMainWindow window;
++        window.resize(1200, 700);
++        window.show();
++        QVERIFY(QTest::qWaitForWindowExposed(&window));
++        QTRY_COMPARE(tabs(window).mid(1), (QStringList{lyrics_name, side_name}));
++        // Dragged: Side first. Then Lyrics brought to the front.
++        bar(window)->moveTab(1, 0);
++        QTRY_COMPARE(QSettings{}.value(QStringLiteral("panels/order")).toStringList(),
++                     (QStringList{side_name, lyrics_name}));
++        bar(window)->setCurrentIndex(1);
++        QTRY_COMPARE(QSettings{}.value(QStringLiteral("panels/front")).toString(), lyrics_name);
++        QCOMPARE(tabs(window), (QStringList{lyrics_name, side_name, lyrics_name}));
++        // Panels hiding and showing them again keep both.
++        window.togglePanels();
++        QTRY_VERIFY(
++            std::ranges::none_of(window.findChildren<QDockWidget*>(),
++                                 [](const QDockWidget* dock) { return dock->isVisible(); }));
++        window.togglePanels();
++        QTRY_COMPARE(tabs(window), (QStringList{lyrics_name, side_name, lyrics_name}));
++        QCOMPARE(QSettings{}.value(QStringLiteral("panels/front")).toString(), lyrics_name);
++    }
++    {
++        BenchMainWindow window;
++        window.resize(1200, 700);
++        window.show();
++        QVERIFY(QTest::qWaitForWindowExposed(&window));
++        QTRY_COMPARE(tabs(window), (QStringList{lyrics_name, side_name, lyrics_name}));
++        // Made again, as when Settings are saved: as they were.
++        window.buildPluginPanels();
++        QTRY_COMPARE(tabs(window), (QStringList{lyrics_name, side_name, lyrics_name}));
++    }
++    // Settings' choice before the one left in front.
++    QSettings{}.setValue(QStringLiteral("panels/start"), side_name);
++    {
++        BenchMainWindow window;
++        window.resize(1200, 700);
++        window.show();
++        QVERIFY(QTest::qWaitForWindowExposed(&window));
++        QTRY_COMPARE(tabs(window), (QStringList{side_name, side_name, lyrics_name}));
++    }
++    {
++        SettingsDialog dialog;
++        auto* front = dialog.findChild<QComboBox*>(QStringLiteral("bench-settings-front-panel"));
++        QVERIFY(front != nullptr);
++        QCOMPARE(front->count(), 3);
++        QCOMPARE(front->itemData(1).toString(), lyrics_name);
++        QCOMPARE(front->currentData().toString(), side_name);
++    }
++    for (const auto* key : {"panels", "plugins", "plugin-panels", "lyrics"}) {
++        QSettings{}.remove(QString::fromLatin1(key));
++    }
++    QDir{folder}.removeRecursively();
++}
++
+ // ADR-0292: one layout -- the sources left, the lists right -- nothing to
+ // edit or rearrange, and the divider kept where it was left.
+ void BenchMainWindowTest::theSourcesKeepTheirWidth() {
+-- 
+2.55.0
+
