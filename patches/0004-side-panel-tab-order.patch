@@ -1,6 +1,6 @@
-From 0e145cdfa2b44f249d02a5c8b586aea49fc1e5f6 Mon Sep 17 00:00:00 2001
+From c20d5049273556069342eb38bb23ac61720debf7 Mon Sep 17 00:00:00 2001
 From: ikloog <ikloog@gmail.com>
-Date: Mon, 9 Nov 2026 09:56:31 -0500
+Date: Mon, 9 Nov 2026 10:19:46 -0500
 Subject: [PATCH] Side panel tabs keep their order and the one in front
 
 Tabs dragged into another order are put in it again whenever the side
@@ -51,7 +51,7 @@ index 8a591a6e..0563751d 100644
 +  front in the next window; Settings offers Lyrics and the enabled
 +  plugins' panels.
 diff --git a/docs/feature-matrix.md b/docs/feature-matrix.md
-index e58de690..1f874d01 100644
+index 859f1b18..02ab4c50 100644
 --- a/docs/feature-matrix.md
 +++ b/docs/feature-matrix.md
 @@ -47,7 +47,7 @@ retaining warnings and errors (covered by the `debug-log` regression test).
@@ -134,7 +134,7 @@ index 588129b6..aa10e7f7 100644
          // In sight again: each asked about what plays now.
          refreshLyrics(plugin_panel_state_);
 diff --git a/src/bench/bench_main_window.hpp b/src/bench/bench_main_window.hpp
-index 4df834f1..906f9993 100644
+index 8d3d0282..421163dd 100644
 --- a/src/bench/bench_main_window.hpp
 +++ b/src/bench/bench_main_window.hpp
 @@ -482,6 +482,17 @@ class BenchMainWindow final : public QMainWindow, public WorkspaceView {
@@ -154,9 +154,9 @@ index 4df834f1..906f9993 100644
 +    QString side_panel_front_;
      void refreshPluginPanels(const EnginePlayback::State& state);
      void askPluginPanel(PluginPanelDock& slot);
-     // What a plugin is told of what plays: the track, its length, the
+     // What a plugin is told of what plays.
 diff --git a/src/bench/bench_plugins.cpp b/src/bench/bench_plugins.cpp
-index c7444a09..4a4150a3 100644
+index 2407d4b3..b792b1a5 100644
 --- a/src/bench/bench_plugins.cpp
 +++ b/src/bench/bench_plugins.cpp
 @@ -20,8 +20,10 @@
