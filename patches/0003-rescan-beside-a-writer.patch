@@ -1,0 +1,132 @@
+From c38f07b45db04f58922b61ecbccfb204ed427f38 Mon Sep 17 00:00:00 2001
+From: ikloog <ikloog@gmail.com>
+Date: Sun, 8 Nov 2026 21:25:02 -0500
+Subject: [PATCH] A rescan is not refused by another connection's write
+
+A full rescan of a library on a server playing music failed every time
+with "database is locked", having stored nothing. The scan left the
+statement reading a file's stored revision on its row, and the one checking
+the root's scan token after a batch: each kept a read transaction open, so
+the next batch's BEGIN IMMEDIATE was asked of an old snapshot. Once another
+connection had written meanwhile -- the engine saving where playback is,
+every five seconds -- SQLite refused at once with SQLITE_BUSY, without the
+busy timeout's wait. A folder's rescan, being short, mostly missed it.
+
+Both statements are reset as soon as they are read.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/persistence/src/local_library.cpp |  9 ++++-
+ tests/local_library_test.cpp          | 53 +++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 1 deletion(-)
+
+diff --git a/src/persistence/src/local_library.cpp b/src/persistence/src/local_library.cpp
+index 355a034d..bf685e25 100644
+--- a/src/persistence/src/local_library.cpp
++++ b/src/persistence/src/local_library.cpp
+@@ -3232,6 +3232,11 @@ core::Result<LibraryScanResult> LocalLibrary::scan(const core::CancellationToken
+                                 (stored_revision == revision ||
+                                  same_file_data(stored_revision, revision)) &&
+                                 previous.number(1) == 1 && !previous.bytes(2).empty();
++                    // Done with: a statement left on its row keeps a read
++                    // transaction open, and a write after another
++                    // connection's is then refused at once (SQLITE_BUSY,
++                    // no waiting) -- the position playback saves, say.
++                    previous.reset();
+                 }
+                 if (unchanged) {
+                     const auto after = core::observe_local_source_revision(raw);
+@@ -3249,7 +3254,9 @@ core::Result<LibraryScanResult> LocalLibrary::scan(const core::CancellationToken
+                         exists.reset();
+                         exists.blob(1, root.raw_path);
+                         exists.text(2, generation);
+-                        if (!exists.next()) {
++                        const bool current = exists.next();
++                        exists.reset();
++                        if (!current) {
+                             seen_batch.reset();
+                             complete = false;
+                             break;
+diff --git a/tests/local_library_test.cpp b/tests/local_library_test.cpp
+index d46a549c..ad172951 100644
+--- a/tests/local_library_test.cpp
++++ b/tests/local_library_test.cpp
+@@ -48,8 +48,10 @@
+ #include <taglib/flacpicture.h>
+ #include <taglib/tpropertymap.h>
+ 
++#include <atomic>
+ #include <filesystem>
+ #include <fstream>
++#include <thread>
+ 
+ namespace trackknife::bench {
+ namespace {
+@@ -154,6 +156,7 @@ class LocalLibraryTest final : public QObject {
+     void scanRetainsFieldRowsAndTechnicals();
+     void denseMetadataDoesNotProduceFalseMissingMatches();
+     void parallelScanIndexesManyFiles();
++    void aRescanIsNotRefusedByAnotherWriter();
+     void ratingsFollowContentIdentity();
+     void migrationRoundTrip();
+     void scansOnlyOnRefresh_data();
+@@ -1069,6 +1072,56 @@ void LocalLibraryTest::parallelScanIndexesManyFiles() {
+     QCOMPARE(library->query(tracks("Retitled"))->entries.size(), 1U);
+ }
+ 
++// A rescan beside another connection writing -- the engine saving where
++// playback is, every few seconds -- is not refused: a statement left on its
++// row kept a read transaction open, and the next write after the other's
++// failed at once with "database is locked", no waiting.
++void LocalLibraryTest::aRescanIsNotRefusedByAnotherWriter() {
++    QTemporaryDir temporary;
++    const std::filesystem::path base{temporary.path().toStdString()};
++    const auto root = base / "music";
++    // More than one batch of unchanged files, so a batch begins after
++    // another has been written.
++    for (int index = 0; index < 1100; ++index) {
++        const auto name = QStringLiteral("%1.flac").arg(index, 4, 10, QLatin1Char('0'));
++        QVERIFY(!fixture(root, name.toStdString(), name.toStdString()).empty());
++    }
++    const auto state = base / "state.sqlite";
++    auto library = persistence::LocalLibrary::open(state);
++    QVERIFY(library && library->add_root(root.native()));
++    persistence::LibraryScanProgress first;
++    QVERIFY(library->scan({}, first).has_value());
++    QCOMPARE(first.indexed.load(), 1100U);
++
++    sqlite3* other = nullptr;
++    QCOMPARE(sqlite3_open(state.c_str(), &other), SQLITE_OK);
++    QCOMPARE(sqlite3_exec(other, "CREATE TABLE beside(n INTEGER); INSERT INTO beside VALUES(0)",
++                          nullptr, nullptr, nullptr),
++             SQLITE_OK);
++    std::atomic<bool> writing{true};
++    // Tried again at once rather than after a busy wait, so it writes
++    // whenever the scan is between transactions.
++    std::jthread writer{[other, &writing] {
++        while (writing) {
++            sqlite3_exec(other, "UPDATE beside SET n=n+1", nullptr, nullptr, nullptr);
++            std::this_thread::yield();
++        }
++    }};
++    // Stopped however the test ends, a failed check included.
++    const auto stop = qScopeGuard([&] {
++        writing = false;
++        writer.join();
++        sqlite3_close(other);
++    });
++    for (int pass = 0; pass < 5; ++pass) {
++        persistence::LibraryScanProgress again;
++        const auto rescanned = library->scan({}, again);
++        QVERIFY2(rescanned.has_value(), rescanned ? "" : rescanned.error().message.c_str());
++        QVERIFY(!rescanned->incomplete);
++        QCOMPARE(again.failed.load(), 0U);
++    }
++}
++
+ void LocalLibraryTest::ratingsFollowContentIdentity() {
+     // ADR-0179: the identity hashes must stay byte-compatible with the Melody
+     // server (sha256 over NUL-joined normalized fields, lowercase hex).
+-- 
+2.55.0
+

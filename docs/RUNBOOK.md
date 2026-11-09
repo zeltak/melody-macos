@@ -159,6 +159,30 @@ ssh macmini '"/Applications/Melody Engine.app/Contents/MacOS/melody-cli" --local
 In Melody on a listening Mac, the bottom of the Library panel reads
 "Library: melody-mini".
 
+### New albums on the server
+
+melodyd on macOS does not watch the music folder, and files written on the
+NAS would not reach the Mac mini as changes anyway: an album appears only
+when something rescans. The server has two LaunchAgents for that:
+
+```sh
+scripts/install-rescan-agent.sh macmini /Volumes/media/imusic   # --every 10 --full-at 05:00
+ssh macmini 'tail ~/Library/Logs/Melody/rescan.log'
+scripts/install-rescan-agent.sh --remove macmini
+```
+
+- `org.melody.rescan-new`, every 10 minutes: the artist and album folders
+  changed since its last run (a file added changes its folder's time),
+  rescanned with `melody-cli update FOLDER...`. Looking costs about 3 s
+  over SMB for 4,360 folders.
+- `org.melody.rescan-all`, daily at 05:00: the whole library, which also
+  drops files that are gone and re-reads changed tags (about 2 minutes for
+  41,500 files). It needs patch 0003: before it, a full rescan while music
+  played failed with "database is locked".
+
+A share not mounted is skipped, not taken as an empty library. By hand:
+`ssh macmini '"/Applications/Melody Engine.app/Contents/MacOS/melody-cli" --local update "/Volumes/media/imusic/Artist/Album"'`.
+
 ## 4. Publish, so the installed Macs follow
 
 ```sh

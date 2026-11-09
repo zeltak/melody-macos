@@ -69,6 +69,16 @@ version is melody-music's `git describe`.
 The building Mac needs: Xcode, Homebrew with `qt`, `ffmpeg`, `taglib`,
 `libebur128`, `libupnp`, `curl`, `openssl@3`, `pkgconf`, `cmake`, `ninja`.
 
+## New albums on a server
+
+```sh
+scripts/install-rescan-agent.sh macmini /Volumes/media/imusic   # --remove HOST to stop
+```
+
+melodyd on macOS does not notice new files, least of all on a NAS share.
+This rescans the folders changed in the last 10 minutes, and the whole
+library daily at 05:00. See [docs/RUNBOOK.md](docs/RUNBOOK.md#new-albums-on-the-server).
+
 ## Releasing automatically
 
 ```sh
