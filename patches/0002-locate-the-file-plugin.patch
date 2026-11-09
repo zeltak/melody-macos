@@ -1,4 +1,4 @@
-From 766b7ed7c5847ca9d5a2a94700c8e9a67376ad1d Mon Sep 17 00:00:00 2001
+From 56db9716da791e89d2af4a6432147879531515c8 Mon Sep 17 00:00:00 2001
 From: ikloog <ikloog@gmail.com>
 Date: Sun, 8 Nov 2026 17:54:48 -0500
 Subject: [PATCH] Locate the file: the playing track's file in your file
@@ -33,9 +33,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  src/bench/bench_plugins.cpp         |   2 +-
  src/workspace/plugins.cpp           |  52 ++++++-----
  src/workspace/plugins.hpp           |  17 +++-
- tests/bench_main_window_test_2.cpp  |  30 +++++--
+ tests/bench_main_window_test_2.cpp  |  36 ++++++--
  tests/plugins_test.cpp              | 132 +++++++++++++++++++++++++++
- 13 files changed, 407 insertions(+), 45 deletions(-)
+ 13 files changed, 413 insertions(+), 45 deletions(-)
  create mode 100755 plugins/locate/locate
  create mode 100644 plugins/locate/plugin.json
 
@@ -463,7 +463,7 @@ index 3dfa162c..60109558 100644
  // What a `list` action answers: a heading and rows, each of text, a detail
  // and a link -- the parts Melody draws, none of the plugin's own.
 diff --git a/tests/bench_main_window_test_2.cpp b/tests/bench_main_window_test_2.cpp
-index bd350580..d9f00080 100644
+index bd350580..60194f57 100644
 --- a/tests/bench_main_window_test_2.cpp
 +++ b/tests/bench_main_window_test_2.cpp
 @@ -4185,8 +4185,9 @@ void BenchMainWindowTest::manyPluginActionsGoInASubmenu() {
@@ -488,7 +488,16 @@ index bd350580..d9f00080 100644
  [ "$on" = library-changed ] && sleep 1
  exit 0
  )sh")
-@@ -4244,16 +4246,26 @@ exit 0
+@@ -4241,19 +4243,35 @@ exit 0
+     auto* page = window.findChild<QAction*>(QStringLiteral("action-run-plugin-hooks-page"));
+     QVERIFY(page != nullptr && menu->actions().contains(page));
+     QCOMPARE(page->text(), QStringLiteral("Write the page"));
++    // A command in the palette too, under the menu it is in.
++    const auto commands = ui::windowCommands(window);
++    const auto in_palette = std::ranges::find_if(
++        commands, [page](const ui::PaletteCommand& command) { return command.action == page; });
++    QVERIFY(in_palette != commands.end());
++    QCOMPARE(in_palette->path.join(QStringLiteral(" › ")), QStringLiteral("Workspace › Run"));
      page->trigger();
      QTRY_COMPARE(lines().size(), 2);
      QCOMPARE(lines().back(), QStringLiteral("hand"));
@@ -519,7 +528,7 @@ index bd350580..d9f00080 100644
               (QStringList{QStringLiteral("library-changed"), QStringLiteral("library-changed")}));
  
      // New albums, told with their folders.
-@@ -4262,7 +4274,7 @@ exit 0
+@@ -4262,7 +4280,7 @@ exit 0
                                       .date = "1999",
                                       .folder = "/srv/music/A/B",
                                       .paths = {"/srv/music/A/B/01.flac"}}});
@@ -528,7 +537,7 @@ index bd350580..d9f00080 100644
      QCOMPARE(lines().back(), QStringLiteral("albums-added /srv/music/A/B"));
  
      // Turned off: its entry goes, and the menu with it.
-@@ -4272,7 +4284,7 @@ exit 0
+@@ -4272,7 +4290,7 @@ exit 0
      QVERIFY(!menu->menuAction()->isVisible());
      window.libraryChanged();
      QTest::qWait(300);
