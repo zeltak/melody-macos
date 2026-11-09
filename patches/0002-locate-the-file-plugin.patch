@@ -1,4 +1,4 @@
-From cb4e0448a3c8fb7a4de467c53f69d68aef24209f Mon Sep 17 00:00:00 2001
+From 766b7ed7c5847ca9d5a2a94700c8e9a67376ad1d Mon Sep 17 00:00:00 2001
 From: ikloog <ikloog@gmail.com>
 Date: Sun, 8 Nov 2026 17:54:48 -0500
 Subject: [PATCH] Locate the file: the playing track's file in your file
@@ -26,7 +26,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  docs/feature-matrix.md              |   2 +-
  docs/plugins.md                     |  16 +++-
  plugins/README.md                   |   1 +
- plugins/locate/locate               | 131 +++++++++++++++++++++++++++
+ plugins/locate/locate               | 133 ++++++++++++++++++++++++++++
  plugins/locate/plugin.json          |  22 +++++
  src/bench/bench_main_window.hpp     |   9 +-
  src/bench/bench_plugin_triggers.cpp |  10 ++-
@@ -34,8 +34,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  src/workspace/plugins.cpp           |  52 ++++++-----
  src/workspace/plugins.hpp           |  17 +++-
  tests/bench_main_window_test_2.cpp  |  30 +++++--
- tests/plugins_test.cpp              | 132 ++++++++++++++++++++++++++++
- 13 files changed, 405 insertions(+), 45 deletions(-)
+ tests/plugins_test.cpp              | 132 +++++++++++++++++++++++++++
+ 13 files changed, 407 insertions(+), 45 deletions(-)
  create mode 100755 plugins/locate/locate
  create mode 100644 plugins/locate/plugin.json
 
@@ -132,10 +132,10 @@ index b47f94f9..75634a6d 100644
  | [`scripts`](scripts) | Your own shell commands, run for each new album, when the library changed, every so many minutes, when Melody starts, or by hand from Workspace › Run. |
 diff --git a/plugins/locate/locate b/plugins/locate/locate
 new file mode 100755
-index 00000000..078b7926
+index 00000000..76ee5a98
 --- /dev/null
 +++ b/plugins/locate/locate
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,133 @@
 +#!/usr/bin/env python3
 +# SPDX-License-Identifier: GPL-3.0-only
 +"""Melody plugin (ADR-0288, ADR-0295): a track's file, shown in a file manager.
@@ -209,7 +209,9 @@ index 00000000..078b7926
 +        run(["sh", "-c", command])
 +    elif manager == "Tandem":
 +        if sys.platform == "darwin":
-+            run(["open", "-a", "Tandem", folder])
++            # A folder opened as Tandem starts is lost: given it to start with.
++            running = subprocess.run(["pgrep", "-x", "tandem-fm"], capture_output=True).returncode == 0
++            run(["open", "-a", "Tandem", folder] if running else ["open", "-a", "Tandem", "--args", folder])
 +        elif shutil.which("tandem-fm"):
 +            run(["tandem-fm", folder])
 +        else:
