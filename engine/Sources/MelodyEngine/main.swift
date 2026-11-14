@@ -2,8 +2,8 @@
 //
 // Melody Engine: the menu-bar app that carries melodyd. It shows whether the
 // engine answers, runs it at login from inside this bundle, rescans its
-// library, restarts it, installs melody-cli and keeps itself and Melody.app
-// up to date from GitHub. melodyd knows nothing of it: it is a client like
+// library, restarts it, acts on albums new to it, installs melody-cli and
+// keeps itself and Melody.app up to date from GitHub. melodyd knows nothing of it: it is a client like
 // any other, and quitting it leaves the engine running.
 
 import AppKit
@@ -16,11 +16,13 @@ struct Options {
     var enableEngine = false
     var openAtLogin = false
     var update = false
+    var newAlbumActions = false
 }
 
 func usage() -> String {
     """
     Usage: melody-engine [--socket PATH] [--check] [--enable-engine | --open-at-login] [--update]
+                         [--new-album-actions]
 
       --socket PATH    melodyd's socket (default \(Engine.defaultSocketPath()))
       --check          say whether melodyd answers, and exit
@@ -29,6 +31,8 @@ func usage() -> String {
       --open-at-login  open this app at login (to keep both apps up to date),
                        leaving melodyd to Melody, and exit
       --update         install the latest release if it is newer, and exit
+      --new-album-actions
+                       open New Album Actions as the app starts
       -h, --help       show this help
 
     """
@@ -50,6 +54,7 @@ func parseOptions(_ arguments: [String]) -> Options {
         case "--enable-engine": options.enableEngine = true
         case "--open-at-login": options.openAtLogin = true
         case "--update": options.update = true
+        case "--new-album-actions": options.newAlbumActions = true
         case "-h", "--help":
             print(usage(), terminator: "")
             exit(0)
@@ -95,6 +100,8 @@ final class Controller: NSObject, NSMenuDelegate {
     private let scanItem = NSMenuItem(title: "Rescan Library", action: #selector(rescan), keyEquivalent: "")
     private let restartItem = NSMenuItem(title: "Restart Engine", action: #selector(restart), keyEquivalent: "")
     private let detailLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let newAlbumsLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let newAlbumsItem = NSMenuItem(title: "New Album Actions…", action: #selector(editNewAlbums), keyEquivalent: "")
     private let engineAtLogin = NSMenuItem(title: "Run Engine at Login", action: #selector(toggleEngine), keyEquivalent: "")
     private let appAtLogin = NSMenuItem(title: "Open at Login", action: #selector(toggleApp), keyEquivalent: "")
     private let toolItem = NSMenuItem(title: "Install Command-Line Tool…", action: #selector(installTool), keyEquivalent: "")
@@ -109,6 +116,11 @@ final class Controller: NSObject, NSMenuDelegate {
     private var scanning = false
     private var restarting = false
     private let stopScan = Atomic(false)
+    // New albums, one at a time, in the order the engine said them.
+    private let albumQueue = DispatchQueue(label: "org.melody.engine-app.new-albums")
+    private var watcher: NewAlbumWatcher?
+    private var newAlbumsWindow: NewAlbumsWindow?
+    private var albumsWaiting = 0
 
     private var autoUpdate: Bool {
         get { UserDefaults.standard.object(forKey: "autoUpdate") as? Bool ?? true }
@@ -127,9 +139,10 @@ final class Controller: NSObject, NSMenuDelegate {
             if image == nil { button.title = "♪" }
             button.appearsDisabled = true
         }
-        for line in [statusLine, detailLine, updateLine] { line.isEnabled = false }
+        for line in [statusLine, detailLine, updateLine, newAlbumsLine] { line.isEnabled = false }
         detailLine.isHidden = true
-        for entry in [scanItem, restartItem, engineAtLogin, appAtLogin, toolItem, updateItem, autoUpdateItem] {
+        for entry in [scanItem, restartItem, newAlbumsItem, engineAtLogin, appAtLogin, toolItem, updateItem,
+                      autoUpdateItem] {
             entry.target = self
         }
         menu.autoenablesItems = false
@@ -139,6 +152,9 @@ final class Controller: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(scanItem)
         menu.addItem(restartItem)
+        menu.addItem(.separator())
+        menu.addItem(newAlbumsLine)
+        menu.addItem(newAlbumsItem)
         menu.addItem(.separator())
         menu.addItem(engineAtLogin)
         menu.addItem(appAtLogin)
@@ -155,6 +171,10 @@ final class Controller: NSObject, NSMenuDelegate {
         item.menu = menu
 
         updater.changed = { [weak self] _ in self?.updateActions() }
+        followNewAlbums(NewAlbumActions.load())
+        if options.newAlbumActions {
+            DispatchQueue.main.async { [weak self] in self?.editNewAlbums() }
+        }
         refreshSettings()
         refresh()
         timers.append(Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -249,6 +269,61 @@ final class Controller: NSObject, NSMenuDelegate {
     private func show(_ detail: String) {
         detailLine.title = detail
         detailLine.isHidden = false
+    }
+
+    // MARK: New albums
+
+    private func followNewAlbums(_ actions: NewAlbumActions) {
+        watcher?.stop()
+        watcher = nil
+        guard actions.doesSomething else {
+            newAlbumsLine.title = actions.enabled ? "New albums: nothing chosen to do" : "New albums: left as they are"
+            return
+        }
+        newAlbumsLine.title = "New albums: waiting for the engine"
+        let socket = options.socket
+        let watcher = NewAlbumWatcher(socketPath: socket, connected: { [weak self] connected in
+            DispatchQueue.main.async {
+                guard let self, self.albumsWaiting == 0 else { return }
+                self.newAlbumsLine.title = connected ? "New albums: watching" : "New albums: waiting for the engine"
+            }
+        }, arrived: { [weak self] album in
+            DispatchQueue.main.async { self?.received(album) }
+        })
+        self.watcher = watcher
+        watcher.start()
+    }
+
+    private func received(_ album: NewAlbum) {
+        albumsWaiting += 1
+        newAlbumsLine.title = "New album: \(album.described)…"
+        Log.newAlbums("new: \(album.described)")
+        let socket = options.socket
+        let stop = stopScan
+        albumQueue.async {
+            // As saved when its turn comes: a change made meanwhile counts.
+            let actions = NewAlbumActions.load()
+            let lines = actions.doesSomething
+                ? Engine.applyActions(actions, to: album, socketPath: socket,
+                                      run: { line, environment in Shell.run(line, environment: environment) },
+                                      shouldStop: { stop.value })
+                : ["nothing done: New Album Actions are off"]
+            for line in lines { Log.newAlbums("  \(album.described): \(line)") }
+            DispatchQueue.main.async {
+                self.albumsWaiting -= 1
+                self.newAlbumsLine.title = "Last new album: \(album.described)"
+                self.newAlbumsLine.toolTip = lines.joined(separator: "\n")
+            }
+        }
+    }
+
+    @objc private func editNewAlbums() {
+        let window = NewAlbumsWindow(actions: NewAlbumActions.load()) { [weak self] actions in
+            actions.save()
+            self?.followNewAlbums(actions)
+        }
+        newAlbumsWindow = window
+        window.present()
     }
 
     // MARK: Actions
@@ -379,6 +454,58 @@ final class Controller: NSObject, NSMenuDelegate {
             System.run("/bin/launchctl", ["bootout", "gui/\(System.uid)/\(LaunchAgents.app)"])
         }
         NSApp.terminate(nil)
+    }
+}
+
+/// The new-album log: ~/Library/Logs/Melody/new-albums.log.
+enum Log {
+    private static let lock = NSLock()
+
+    static func newAlbums(_ line: String) {
+        let stamp = ISO8601DateFormatter.string(from: Date(), timeZone: .current,
+                                                formatOptions: [.withFullDate, .withTime, .withColonSeparatorInTime,
+                                                                .withSpaceBetweenDateAndTime])
+        let path = (System.logs as NSString).appendingPathComponent("new-albums.log")
+        lock.lock(); defer { lock.unlock() }
+        try? FileManager.default.createDirectory(atPath: System.logs, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let file = FileHandle(forWritingAtPath: path) else { return }
+        defer { try? file.close() }
+        file.seekToEndOfFile()
+        file.write(Data("\(stamp) \(line)\n".utf8))
+    }
+}
+
+/// A new album's command, run by /bin/sh. The line is bytes -- the folder
+/// in it may not be UTF-8 -- so it goes in a script file, not an argument.
+enum Shell {
+    static func run(_ line: Data, environment: [String: String]) -> Int32 {
+        let script = (NSTemporaryDirectory() as NSString)
+            .appendingPathComponent("melody-new-album-\(UUID().uuidString).sh")
+        guard FileManager.default.createFile(atPath: script, contents: line, attributes: [.posixPermissions: 0o600])
+        else { return -1 }
+        defer { try? FileManager.default.removeItem(atPath: script) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [script]
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, given in given }
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        do {
+            try process.run()
+        } catch {
+            Log.newAlbums("  command could not start: \(error.localizedDescription)")
+            return -1
+        }
+        let said = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        for line in String(decoding: said, as: UTF8.self).split(separator: "\n").prefix(50) {
+            Log.newAlbums("    | \(line)")
+        }
+        return process.terminationStatus
     }
 }
 

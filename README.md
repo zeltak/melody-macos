@@ -18,6 +18,16 @@ Its menu shows whether the engine answers, and offers:
 
 - **Rescan Library** — the engine's own `catalogue.scan`, with progress.
 - **Restart Engine** — `launchctl kickstart -k` of the engine's LaunchAgent.
+- **New Album Actions…** — what is done with each album new to the library,
+  once the engine says it is whole (`catalogue.albums_added`): its tracks
+  rated (only unrated ones, by default; 2 stars is 4 of 10), ReplayGain
+  measured and written by the engine — album or track gain, true peak, into
+  the files or a sidecar — and a command of your own run by `/bin/sh`, `{}`
+  the album's folder and `MELODY_ALBUM_FOLDER`, `_ARTIST`, `_TITLE`,
+  `_DATE` set. Off until switched on. Albums added while the app is not
+  running are left as they are. Each album, and what came of it, goes to
+  `~/Library/Logs/Melody/new-albums.log`; the menu shows the last.
+  `melody-engine --new-album-actions` opens the window as the app starts.
 - **Run Engine at Login** — writes `~/Library/LaunchAgents/org.melody.melodyd.plist`
   running `melodyd` from inside the app, with no options, so it uses the
   usual state (`~/Library/Application Support/melody/engine`), configuration
