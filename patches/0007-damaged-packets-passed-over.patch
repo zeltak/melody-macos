@@ -1,0 +1,567 @@
+diff --git a/docs/adr/0354-damaged-packets-are-passed-over.md b/docs/adr/0354-damaged-packets-are-passed-over.md
+new file mode 100644
+index 00000000..f5e6eab1
+--- /dev/null
++++ b/docs/adr/0354-damaged-packets-are-passed-over.md
+@@ -0,0 +1,55 @@
++# ADR-0354: A damaged packet is passed over, not the track
++
++## Status
++
++Proposed, 2026-11-12. Qualifies the decoder's handling of codec errors; the
++converter's verification of its own output (ADR-0133) is unchanged.
++
++## Context
++
++- **One bad packet failed the whole file.** The decoder stopped at the first
++  packet the codec refused, "submitting encoded audio failed: Invalid data
++  found when processing input". Real libraries hold such files: an MP3 with a
++  few frames missing their header, an ALAC file in MP4 whose last packet is
++  8 bytes. Both play everywhere else; FFmpeg's own `ffmpeg` and `ffplay` say
++  "Header missing" or "invalid samples per frame: 0", pass the packet over
++  and go on.
++- **FFmpeg 9 made it common.** Built with FFmpeg 8 the engine decoded these
++  files; with FFmpeg 9 and later the same packets come back as
++  `AVERROR_INVALIDDATA`. In one library of 35,000 tracks, 78 of the first 90
++  files a conversion took were refused this way (70 MP3, 8 ALAC), each a
++  handful of damaged packets in an otherwise sound file. Playback goes
++  through the same decoder.
++- **Passing everything over would hide a file that is not audio.** A stream
++  of nothing but refused packets, or a converted file that came out damaged,
++  must still fail.
++
++## Decision
++
++1. **A packet the codec refuses as invalid data is passed over and counted.**
++   At sending it and at receiving its frame alike. Its few milliseconds are
++   missing from the decoded audio; everything else decodes as before. A file
++   renamed over mid-read is still reopened first (it reads as damage too).
++2. **Damage that is the file fails as before.** More than 32 refused packets
++   in a row, or a file that ends having decoded no frame at all, fails with
++   "decoding damaged audio". 32 is far more than any real damage seen: a
++   handful at most, never more than a few together.
++3. **The count is said.** `AudioDecoder::damaged_packets()`. A conversion's
++   result carries `damaged_source_packets`, and the `convert.apply` job's
++   file carries `damaged_packets` when there were any (protocol level 33).
++4. **A converter's own output is held to none.** Its verification reads the
++   new file back and refuses it if a single packet had to be passed over:
++   what the engine writes is never damaged.
++
++## Verification
++
++- `decoder-damaged-packets`, from the MP3 fixture: one frame's header
++  removed decodes, one packet passed over, one frame short; every header
++  removed fails or yields nothing; converted to FLAC, the damage is said and
++  the output reads back with none. Without the decision the first and third
++  fail with the error above.
++- `decoder-replaced-file`, `audio-convert`, `formats-probe`,
++  `loudness-analyzer` and `local-playback` fail the same checks with and
++  without it on macOS 27 (libvorbis absent, module files).
++- The two real files above convert to Opus and FLAC, 5 and 1 packets passed
++  over, matching what `ffmpeg` reports; the outputs decode cleanly.
+diff --git a/docs/feature-matrix.md b/docs/feature-matrix.md
+index 2de9bff5..aa0a78e8 100644
+--- a/docs/feature-matrix.md
++++ b/docs/feature-matrix.md
+@@ -88,7 +88,7 @@ ADR-0224.
+ | Local folders and intake | Implemented | File/folder/drop/CLI intake -- from a file manager, not a browser of Melody's own (ADR-0298); onto a list of an engine elsewhere, each file is its track where its music is mounted here, the rest in a list of this computer's -- lossless raw-path handling, and bounded CUE/chapter/subsong expansion into lists. |
+ | Engine libraries | Implemented | Folders are chosen per engine; **only Refresh starts a filesystem scan**. Paged artist/album/track browsing and search, offline retention, deleted files removed by Refresh even when another file could not be read and on a share mounted again under another device number (ADR-0313), the files a scan could not read listed with why from under the status line (ADR-0352, protocol level 32, tested in `local-library`, `remote-catalogue` and `library-panel-engine`), numbered tracks, covers, album counts before expansion, locate artist/album. Tag and move commits update the index without rescanning (ADRs 0115–0118, 0126, 0151), and the engine tells a write's changes once it is still, so the library panel refreshes once, not file by file (ADR-0315). Every change -- a write, a move, a deletion a watcher reports, a cover saved, a scan -- is told to every client (`catalogue.changed`), and each engine's library panel follows it in place: the levels it has open are asked again and merged into their rows, what is open stays open, the covers of the albums named are asked again (ADR-0268, tested in `library-panel-engine`). |
+ | Advanced library views | Partial | Structured `tkq-1` filters over every tag and technical value (ADR-0150), saved searches (ADR-0163), committed result tabs. Library views (ADR-0254): the tree grouped by `tkfmt-1` levels with `$each` multi-value branching, per-level sort expressions, shipped Genre/Year/Decade/Album views and user views with an editor and live preview, grouped by the engine (tested in `library-views`, `library-views-panel`; 100,000 tracks group in 0.7 s, `library-views-benchmark-smoke`). Locate artist and album find the file in the layout shown -- a view through its levels as the engine finds them, Folders by its folders, Recently added by its album -- and keep it (ADR-0273). Both are also Edit-menu and command-palette commands on the open list's current track. Autoplaylists, logical-title indexing and a Melody artwork grid remain open. |
+-| Playback | Implemented | FFmpeg/libopenmpt sources through PipeWire on Linux and CoreAudio on macOS, or ticketed streams to output agents and UPnP renderers; sample-range seeking, gapless transitions where the selected output supports them (AAC in MP4 joins exactly only with FFmpeg 9 or later; older FFmpeg keeps a few milliseconds of encoder padding, and Melody deliberately does not trim it itself), buffer profiles, and output/default/hotplug handling all live in the engine. Following the system default, playback pauses when the device it played on goes away -- headphones unplugged, a Bluetooth headset switched off -- rather than going on aloud on the next one; a chosen device that goes away suspends playback until it returns. ReplayGain preamps apply to the local and agent paths; UPnP explicitly plays at unity gain. |
++| Playback | Implemented | FFmpeg/libopenmpt sources through PipeWire on Linux and CoreAudio on macOS, or ticketed streams to output agents and UPnP renderers; sample-range seeking, gapless transitions where the selected output supports them (AAC in MP4 joins exactly only with FFmpeg 9 or later; older FFmpeg keeps a few milliseconds of encoder padding, and Melody deliberately does not trim it itself), buffer profiles, and output/default/hotplug handling all live in the engine. A packet the codec refuses as damaged -- an MP3 frame without its header, a truncated ALAC packet -- is passed over and counted rather than failing the track; a run of them, or a file of nothing else, still fails, and a conversion's own output must have none (ADR-0354, tested in `decoder-damaged-packets`). Following the system default, playback pauses when the device it played on goes away -- headphones unplugged, a Bluetooth headset switched off -- rather than going on aloud on the next one; a chosen device that goes away suspends playback until it returns. ReplayGain preamps apply to the local and agent paths; UPnP explicitly plays at unity gain. |
+ | Playback modes | Implemented | Repeat, Random, Single/Consume including one-shot modes, owned by the engine (ADRs 0119–0121). |
+ | Track and album ratings | Implemented | 0–10 scale (ADR-0179), stored in the engine. Optionally written into files as `FMPS_RATING` and MP3 POPM (ADR-0237), with a plain 0–10 copy in a backup tag of the user's naming (ADR-0245). Rated from the window's header too -- five stars beside what plays, half and whole, on the engine of the list it plays from -- and the Rate menu closes on a click, its values one mark at most (tested in `rating-stars`). |
+ | Album shuffle, history, and resume | Implemented, bounded | Listening statistics, paused resume including Up Next, one-shot and continuous album shuffle, `HISTORY(...)` predicates and history sorting (ADRs 0207–0216), per engine. Calendar-relative time operators remain open. |
+diff --git a/docs/protocol-levels.md b/docs/protocol-levels.md
+index 866b8c58..66b77e65 100644
+--- a/docs/protocol-levels.md
++++ b/docs/protocol-levels.md
+@@ -7,6 +7,15 @@ engine's level with its own and says once when the engine is older.
+ 
+ ## Protocol 1
+ 
++### Level 33 (2026-11-12)
++
++ADR-0354: a damaged packet is passed over, not the track.
++
++- A file of the `convert.apply` job's outcome carries `damaged_packets`: how
++  many packets of its source the codec refused as invalid data and were
++  passed over, their milliseconds missing from what was made. Absent when
++  there were none. A source of nothing but damage still fails.
++
+ ### Level 32 (2026-11-11)
+ 
+ ADR-0352: a scan names the files it could not read.
+diff --git a/src/convert/include/trackknife/convert/convert.hpp b/src/convert/include/trackknife/convert/convert.hpp
+index 4b4f2bcd..045380a5 100644
+--- a/src/convert/include/trackknife/convert/convert.hpp
++++ b/src/convert/include/trackknife/convert/convert.hpp
+@@ -88,6 +88,9 @@ struct ConvertedAudioFile {
+     int channels{0};
+     // Verified duration of the written output, in output-rate samples.
+     std::int64_t duration_samples{0};
++    // Damaged packets of the source passed over while decoding it (ADR-0354);
++    // their few milliseconds are missing from the output.
++    std::uint64_t damaged_source_packets{0U};
+ 
+     friend bool operator==(const ConvertedAudioFile&, const ConvertedAudioFile&) = default;
+ };
+diff --git a/src/convert/src/convert.cpp b/src/convert/src/convert.cpp
+index e5ea0678..27fe0e1e 100644
+--- a/src/convert/src/convert.cpp
++++ b/src/convert/src/convert.cpp
+@@ -1042,6 +1042,16 @@ core::Result<ConvertedAudioFile> convert_audio_file(const AudioConversionRequest
+         }
+         verified_frames += static_cast<std::int64_t>((*chunk)->frame_count(output_channels));
+     }
++    // What was just written is held to more than a source is: not one of its
++    // packets may need passing over (ADR-0354).
++    if (verify->damaged_packets() > 0U) {
++        return std::unexpected(
++            core::Error{.code = core::ErrorCode::invariant,
++                        .message = "converted audio has damaged packets",
++                        .context = {{.key = "path", .value = request.destination_raw_path},
++                                    {.key = "damaged_packets",
++                                     .value = std::to_string(verify->damaged_packets())}}});
++    }
+     const auto expected_output_frames = static_cast<std::int64_t>(std::llround(
+         static_cast<double>(decoded_frames) * output_rate / source_format.sample_rate));
+     const auto tolerance = std::max<std::int64_t>(output_rate / 5, 1);
+@@ -1083,6 +1093,7 @@ core::Result<ConvertedAudioFile> convert_audio_file(const AudioConversionRequest
+         .sample_rate = output_rate,
+         .channels = output_channels,
+         .duration_samples = verified_frames,
++        .damaged_source_packets = decoder->damaged_packets(),
+     };
+ }
+ 
+diff --git a/src/engine/src/convert_methods.cpp b/src/engine/src/convert_methods.cpp
+index 0d92f693..782afe7f 100644
+--- a/src/engine/src/convert_methods.cpp
++++ b/src/engine/src/convert_methods.cpp
+@@ -300,11 +300,16 @@ void register_convert_jobs(JobCatalog& jobs, LocalCatalogue& catalogue) {
+             }
+             for (const auto& item : scanned->items) {
+                 const bool made = item.state == convert::ConversionScanState::converted;
+-                files.push_back(
+-                    Json{{"source", protocol::encode_raw_path(item.source_raw_path)},
+-                         {"target", protocol::encode_raw_path(item.destination_raw_path)},
+-                         {"converted", made},
+-                         {"error", made || !item.issue ? Json() : Json(item.issue->message)}});
++                Json file{{"source", protocol::encode_raw_path(item.source_raw_path)},
++                          {"target", protocol::encode_raw_path(item.destination_raw_path)},
++                          {"converted", made},
++                          {"error", made || !item.issue ? Json() : Json(item.issue->message)}};
++                // Said only when there were any: a source with damaged packets
++                // passed over is converted, and missing their milliseconds.
++                if (made && item.converted && item.converted->damaged_source_packets > 0U) {
++                    file["damaged_packets"] = item.converted->damaged_source_packets;
++                }
++                files.push_back(std::move(file));
+             }
+             return Json{{"result", Json{{"files", std::move(files)},
+                                         {"passed", passed},
+diff --git a/src/formats/include/trackknife/formats/decoder.hpp b/src/formats/include/trackknife/formats/decoder.hpp
+index 0cfedd06..6409be8e 100644
+--- a/src/formats/include/trackknife/formats/decoder.hpp
++++ b/src/formats/include/trackknife/formats/decoder.hpp
+@@ -108,6 +108,9 @@ class AudioDecoder final {
+     [[nodiscard]] const AudioSourceSelection& source_selection() const noexcept;
+     [[nodiscard]] core::Result<void> seek_to_sample(std::int64_t target_sample);
+     [[nodiscard]] core::Result<std::optional<PcmChunk>> next_chunk();
++    // Packets passed over so far because the codec refused them as invalid
++    // data (ADR-0354). A run of them, or a file of nothing else, fails.
++    [[nodiscard]] std::uint64_t damaged_packets() const noexcept;
+ 
+   private:
+     struct Impl;
+diff --git a/src/formats/src/decoder.cpp b/src/formats/src/decoder.cpp
+index 4bd0b561..16cc02a6 100644
+--- a/src/formats/src/decoder.cpp
++++ b/src/formats/src/decoder.cpp
+@@ -94,6 +94,14 @@ struct AudioDecoder::Impl {
+     // only for the machine that replaced it -- and reading fails mid-track.
+     std::optional<std::pair<dev_t, ino_t>> identity;
+     unsigned reopened{0};
++    // Packets the codec refused as invalid data and that were passed over
++    // (ADR-0354): one damaged frame of an otherwise sound file -- an MP3
++    // frame without its header, a truncated last ALAC packet -- costs its
++    // few milliseconds, not the track. A run of them is a file that does
++    // not decode, and fails as before.
++    std::uint64_t damaged_packets{0};
++    unsigned damaged_in_a_row{0};
++    bool decoded_any{false};
+     bool input_finished{false};
+     bool drain_sent{false};
+     bool range_finished{false};
+@@ -756,13 +764,38 @@ bool AudioDecoder::reopen_if_replaced() {
+         return false;
+     }
+     const auto times = decoder.reopened + 1U;
++    const auto damaged = decoder.damaged_packets;
+     implementation_ = std::move(fresh->implementation_);
+     implementation_->reopened = times;
++    implementation_->damaged_packets = damaged;
+     return true;
+ }
+ 
++std::uint64_t AudioDecoder::damaged_packets() const noexcept {
++    return implementation_->damaged_packets;
++}
++
+ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+     auto& decoder = *implementation_;
++    // More in a row than any damage seen in real files; a stream of them is
++    // not audio with a flaw in it.
++    constexpr unsigned most_damaged_in_a_row = 32U;
++    const auto pass_over_damaged = [&decoder]() -> core::Result<void> {
++        ++decoder.damaged_packets;
++        if (++decoder.damaged_in_a_row > most_damaged_in_a_row) {
++            return std::unexpected(decoder_error(AVERROR_INVALIDDATA, "decoding damaged audio",
++                                                 decoder.raw_path, decoder.cancellation));
++        }
++        return {};
++    };
++    const auto finished = [&decoder]() -> core::Result<std::optional<PcmChunk>> {
++        // Passed-over packets and nothing else is not a sound file.
++        if (decoder.damaged_packets > 0U && !decoder.decoded_any) {
++            return std::unexpected(decoder_error(AVERROR_INVALIDDATA, "decoding damaged audio",
++                                                 decoder.raw_path, decoder.cancellation));
++        }
++        return std::optional<PcmChunk>{};
++    };
+     while (true) {
+         if (decoder.cancellation.is_cancellation_requested()) {
+             return std::unexpected(core::Error{
+@@ -776,6 +809,8 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+         }
+         const auto receive_result = avcodec_receive_frame(decoder.codec, decoder.frame);
+         if (receive_result >= 0) {
++            decoder.decoded_any = true;
++            decoder.damaged_in_a_row = 0U;
+             auto converted = decoder.convert_frame();
+             if (!converted || !*converted) {
+                 return converted;
+@@ -798,7 +833,16 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+             continue;
+         }
+         if (receive_result == AVERROR_EOF) {
+-            return std::optional<PcmChunk>{};
++            return finished();
++        }
++        if (receive_result == AVERROR_INVALIDDATA) {
++            if (reopen_if_replaced()) {
++                return next_chunk();
++            }
++            if (auto passed = pass_over_damaged(); !passed) {
++                return std::unexpected(std::move(passed.error()));
++            }
++            continue;
+         }
+         if (receive_result != AVERROR(EAGAIN)) {
+             if (reopen_if_replaced()) {
+@@ -818,7 +862,7 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+                 }
+                 continue;
+             }
+-            return std::optional<PcmChunk>{};
++            return finished();
+         }
+ 
+         auto read_result = 0;
+@@ -843,6 +887,17 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+         }
+         const auto send_result = avcodec_send_packet(decoder.codec, decoder.packet);
+         av_packet_unref(decoder.packet);
++        if (send_result == AVERROR_INVALIDDATA) {
++            // A file renamed over mid-read reads as damage too: it is
++            // reopened, not passed over.
++            if (reopen_if_replaced()) {
++                return next_chunk();
++            }
++            if (auto passed = pass_over_damaged(); !passed) {
++                return std::unexpected(std::move(passed.error()));
++            }
++            continue;
++        }
+         if (send_result < 0 && send_result != AVERROR(EAGAIN)) {
+             if (reopen_if_replaced()) {
+                 return next_chunk();
+diff --git a/src/protocol/include/trackknife/protocol/version.hpp b/src/protocol/include/trackknife/protocol/version.hpp
+index b521b6a4..e4e2b875 100644
+--- a/src/protocol/include/trackknife/protocol/version.hpp
++++ b/src/protocol/include/trackknife/protocol/version.hpp
+@@ -13,7 +13,7 @@ namespace trackknife::protocol {
+ // adds to the protocol -- the additions of each are listed in
+ // docs/protocol-levels.md -- and never down within a protocol.
+ inline constexpr int protocol_version = 1;
+-inline constexpr int protocol_level = 32;
++inline constexpr int protocol_level = 33;
+ 
+ // What an engine says it speaks, from its engine.info answer. One too old to
+ // say is protocol 1, level 0.
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 92cb0bce..2ee58579 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -484,6 +484,17 @@ add_test(
+     COMMAND trackknife_decoder_replaced_file_tests
+ )
+ 
++add_executable(trackknife_decoder_damaged_packets_tests decoder_damaged_packets_test.cpp)
++target_link_libraries(
++    trackknife_decoder_damaged_packets_tests
++    PRIVATE Trackknife::Convert Trackknife::Formats trackknife_project_options
++            trackknife_project_warnings
++)
++add_test(
++    NAME decoder-damaged-packets
++    COMMAND trackknife_decoder_damaged_packets_tests "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/audio"
++)
++
+ add_executable(trackknife_cue_sheet_tests cue_sheet_test.cpp)
+ target_link_libraries(
+     trackknife_cue_sheet_tests
+diff --git a/tests/decoder_damaged_packets_test.cpp b/tests/decoder_damaged_packets_test.cpp
+new file mode 100644
+index 00000000..a8dbb04c
+--- /dev/null
++++ b/tests/decoder_damaged_packets_test.cpp
+@@ -0,0 +1,237 @@
++// SPDX-License-Identifier: GPL-3.0-only
++
++// A damaged packet in an otherwise sound file -- an MP3 frame without its
++// header, a truncated last ALAC packet -- is passed over and counted, as
++// FFmpeg's own tools do, not taken for the whole track (ADR-0354). A file
++// of nothing but damage still fails, and a converter's output is still
++// held to having none.
++
++#include "trackknife/convert/convert.hpp"
++#include "trackknife/convert/preset.hpp"
++#include "trackknife/formats/decoder.hpp"
++
++#include <unistd.h>
++
++#include <array>
++#include <cstdint>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <iterator>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace {
++
++namespace formats = trackknife::formats;
++
++int failures = 0;
++
++void check(const bool condition, const char* expression, const int line) {
++    if (!condition) {
++        std::cerr << "line " << line << ": " << expression << '\n';
++        ++failures;
++    }
++}
++
++#define CHECK(expression) check((expression), #expression, __LINE__)
++
++[[nodiscard]] std::optional<std::vector<unsigned char>>
++decode_base64_file(const std::filesystem::path& path) {
++    std::ifstream input{path, std::ios::binary};
++    if (!input) {
++        return std::nullopt;
++    }
++    const std::string encoded{std::istreambuf_iterator<char>{input},
++                              std::istreambuf_iterator<char>{}};
++    std::array<int, 256> values{};
++    values.fill(-1);
++    constexpr std::string_view alphabet{
++        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"};
++    for (std::size_t index = 0U; index < alphabet.size(); ++index) {
++        values[static_cast<unsigned char>(alphabet[index])] = static_cast<int>(index);
++    }
++    std::vector<unsigned char> decoded;
++    unsigned accumulator = 0U;
++    unsigned bits = 0U;
++    for (const auto character : encoded) {
++        if (character == '=') {
++            break;
++        }
++        const auto value = values[static_cast<unsigned char>(character)];
++        if (value < 0) {
++            continue;
++        }
++        accumulator = (accumulator << 6U) | static_cast<unsigned>(value);
++        bits += 6U;
++        if (bits >= 8U) {
++            bits -= 8U;
++            decoded.push_back(static_cast<unsigned char>((accumulator >> bits) & 0xFFU));
++        }
++    }
++    return decoded;
++}
++
++// The MPEG audio frames of a file: where each header is, walked from the
++// first by the lengths the headers give (MPEG-1 Layer III).
++[[nodiscard]] std::vector<std::size_t> mp3_frames(const std::vector<unsigned char>& bytes) {
++    constexpr std::array<int, 16> kbps{0,   32,  40,  48,  56,  64,  80,  96,
++                                       112, 128, 160, 192, 224, 256, 320, 0};
++    constexpr std::array<int, 4> rates{44'100, 48'000, 32'000, 0};
++    std::vector<std::size_t> frames;
++    std::size_t at = 0U;
++    // Past an ID3v2 tag.
++    if (bytes.size() > 10U && bytes[0] == 'I' && bytes[1] == 'D' && bytes[2] == '3') {
++        at = 10U + ((bytes[6] & 0x7FU) << 21U | (bytes[7] & 0x7FU) << 14U |
++                    (bytes[8] & 0x7FU) << 7U | (bytes[9] & 0x7FU));
++    }
++    while (at + 4U <= bytes.size() && bytes[at] == 0xFFU && (bytes[at + 1U] & 0xFEU) == 0xFAU) {
++        const auto rate = rates[(bytes[at + 2U] >> 2U) & 0x3U];
++        const auto bitrate = kbps[bytes[at + 2U] >> 4U];
++        if (rate == 0 || bitrate == 0) {
++            break;
++        }
++        frames.push_back(at);
++        const auto padding = static_cast<int>((bytes[at + 2U] >> 1U) & 1U);
++        at += static_cast<std::size_t>(144 * bitrate * 1000 / rate + padding);
++    }
++    return frames;
++}
++
++[[nodiscard]] std::filesystem::path write(const std::filesystem::path& path,
++                                          const std::vector<unsigned char>& bytes) {
++    std::ofstream output{path, std::ios::binary};
++    output.write(reinterpret_cast<const char*>(bytes.data()),
++                 static_cast<std::streamsize>(bytes.size()));
++    CHECK(output.good());
++    return path;
++}
++
++// Every frame decoded, or the error that stopped it.
++struct Decoded {
++    std::int64_t frames{0};
++    std::uint64_t damaged{0U};
++    std::optional<std::string> error;
++};
++
++[[nodiscard]] Decoded decode(const std::filesystem::path& path) {
++    Decoded result;
++    auto decoder = formats::AudioDecoder::open(path.native(), {});
++    if (!decoder) {
++        result.error = decoder.error().message;
++        return result;
++    }
++    const auto channels = decoder->output_format().channels;
++    while (true) {
++        auto chunk = decoder->next_chunk();
++        if (!chunk) {
++            result.error = chunk.error().message;
++            break;
++        }
++        if (!*chunk) {
++            break;
++        }
++        result.frames += static_cast<std::int64_t>((*chunk)->frame_count(channels));
++    }
++    result.damaged = decoder->damaged_packets();
++    return result;
++}
++
++} // namespace
++
++int main(const int argc, char** argv) {
++    if (argc != 2) {
++        std::cerr << "usage: decoder_damaged_packets_test FIXTURE_DIRECTORY\n";
++        return EXIT_FAILURE;
++    }
++    const auto source = decode_base64_file(std::filesystem::path{argv[1]} / "gapless-tone-mp3.b64");
++    CHECK(source.has_value());
++    if (!source) {
++        return EXIT_FAILURE;
++    }
++    const auto frames = mp3_frames(*source);
++    CHECK(frames.size() >= 5U);
++    if (frames.size() < 5U) {
++        return EXIT_FAILURE;
++    }
++    const auto directory = std::filesystem::temp_directory_path() /
++                           ("trackknife-damaged-" + std::to_string(::getpid()));
++    std::filesystem::create_directories(directory);
++
++    const auto sound = decode(write(directory / "sound.mp3", *source));
++    CHECK(!sound.error);
++    CHECK(sound.damaged == 0U);
++    CHECK(sound.frames > 0);
++
++    // One frame's header gone, as in real files: FFmpeg's MP3 decoder says
++    // "Header missing" and refuses that packet as invalid data. Not one of
++    // the first frames, which the demuxer reads to recognise the file and
++    // would skip as junk; frames[0] is the encoder's info frame.
++    auto one = *source;
++    for (std::size_t byte = 0U; byte < 4U; ++byte) {
++        one[frames[3] + byte] = 0U;
++    }
++    const auto flawed = decode(write(directory / "one-damaged.mp3", one));
++    if (flawed.error) {
++        std::cerr << "one damaged frame: " << *flawed.error << '\n';
++    }
++    CHECK(!flawed.error);
++    CHECK(flawed.damaged == 1U);
++    // Its frame is missing, and nothing else: an MPEG-1 Layer III frame is
++    // 1152 samples.
++    CHECK(flawed.frames < sound.frames);
++    CHECK(sound.frames - flawed.frames <= 1152 * 2);
++
++    // Nothing but damage is no sound file: every frame after the first
++    // loses its header, and the first is the encoder's silent info frame.
++    auto ruined = *source;
++    for (const auto frame : frames) {
++        for (std::size_t byte = 1U; byte < 4U; ++byte) {
++            ruined[frame + byte] = 0U;
++        }
++    }
++    const auto garbage = decode(write(directory / "all-damaged.mp3", ruined));
++    CHECK(garbage.error.has_value() || garbage.frames == 0);
++
++    // Converted, the flaw is passed over and said; the output it made is
++    // read back strictly, damage-free.
++    const auto flac = trackknife::convert::find_encoder_preset("flac");
++    CHECK(flac.has_value());
++    if (flac) {
++        const auto destination = directory / "one-damaged.flac";
++        const auto converted = trackknife::convert::convert_audio_file(
++            {.source_raw_path = (directory / "one-damaged.mp3").native(),
++             .source_selection = {},
++             .source_range = {},
++             .destination_raw_path = destination.native(),
++             .preset = *flac,
++             .target_sample_rate = {},
++             .sample_rate_cap = {},
++             .target_bit_depth = {},
++             .keep_source_bit_depth = false,
++             .metadata = {},
++             .artwork = {}},
++            [](std::uint64_t, std::optional<std::uint64_t>) {});
++        if (!converted) {
++            std::cerr << "converting one damaged frame: " << converted.error().message << '\n';
++        }
++        CHECK(converted.has_value());
++        if (converted) {
++            CHECK(converted->damaged_source_packets == 1U);
++            const auto output = decode(destination);
++            CHECK(!output.error);
++            CHECK(output.damaged == 0U);
++        }
++    }
++
++    std::error_code removed;
++    std::filesystem::remove_all(directory, removed);
++    if (failures != 0) {
++        std::cerr << failures << " check(s) failed\n";
++        return EXIT_FAILURE;
++    }
++    return EXIT_SUCCESS;
++}
