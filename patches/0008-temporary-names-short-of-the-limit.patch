@@ -1,0 +1,47 @@
+diff --git a/src/core/include/trackknife/core/atomic_rename.hpp b/src/core/include/trackknife/core/atomic_rename.hpp
+index 5d949ec4..f5ba344d 100644
+--- a/src/core/include/trackknife/core/atomic_rename.hpp
++++ b/src/core/include/trackknife/core/atomic_rename.hpp
+@@ -33,8 +33,9 @@ enum class NoReplacePublishMethod : std::uint8_t {
+ // A hidden sibling of `target` to write before renaming it into place:
+ // ".NAME.LABEL-RANDOM" in the same folder. NAME is the target's, shortened
+ // -- never inside a UTF-8 character -- only as far as needed for the whole
+-// to stay within the 255 bytes a file name may have: a target's own name
+-// can be that long, and a sibling named after all of it could not be made.
++// to stay within 240 bytes: a target's own name can be as long as the 255
++// bytes a file name may have, a sibling named after all of it could not be
++// made, and over SMB one of 254 or 255 bytes cannot be renamed.
+ [[nodiscard]] std::filesystem::path temporary_sibling(const std::filesystem::path& target,
+                                                       std::string_view label);
+ 
+diff --git a/src/core/src/atomic_rename.cpp b/src/core/src/atomic_rename.cpp
+index dfc6c731..bdcf5b4a 100644
+--- a/src/core/src/atomic_rename.cpp
++++ b/src/core/src/atomic_rename.cpp
+@@ -91,7 +91,11 @@ Result<NoReplacePublishMethod> publish_no_replace_at(const int source_dir_fd,
+ 
+ std::filesystem::path temporary_sibling(const std::filesystem::path& target,
+                                         const std::string_view label) {
+-    constexpr std::size_t longest_name = 255U;
++    // Short of the 255 bytes a file name may have: over SMB, macOS cannot
++    // rename to or from a name of 254 or 255 bytes ("File name too long"),
++    // though it makes one -- a temporary named to the limit is never
++    // published.
++    constexpr std::size_t longest_name = 240U;
+     const auto suffix = "." + std::string{label} + "-" + StableId::random().to_string();
+     auto name = target.filename().native();
+     const auto room = longest_name - 1U - std::min(suffix.size(), longest_name - 1U);
+diff --git a/tests/core_primitives_test.cpp b/tests/core_primitives_test.cpp
+index b7320ccd..c805a6a7 100644
+--- a/tests/core_primitives_test.cpp
++++ b/tests/core_primitives_test.cpp
+@@ -317,7 +317,8 @@ void temporarySiblingsStayWithinAFileName() {
+     const auto sibling = trackknife::core::temporary_sibling(target, "tk-part");
+     const auto name = sibling.filename().native();
+     check(sibling.parent_path() == target.parent_path(), "beside its target", __LINE__);
+-    check(name.size() <= 255U, "within a file name's length", __LINE__);
++    // 240, short of 255: over SMB, a name of 254 or 255 bytes cannot be renamed.
++    check(name.size() <= 240U, "short of a file name's length", __LINE__);
+     check(name.front() == '.' && name.find(".tk-part-") != std::string::npos,
+           "hidden, and labelled", __LINE__);
+     check(valid_utf8(name), "never cut inside a character", __LINE__);
