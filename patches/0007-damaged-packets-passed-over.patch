@@ -1,9 +1,9 @@
 diff --git a/docs/adr/0354-damaged-packets-are-passed-over.md b/docs/adr/0354-damaged-packets-are-passed-over.md
 new file mode 100644
-index 00000000..f5e6eab1
+index 00000000..8673e557
 --- /dev/null
 +++ b/docs/adr/0354-damaged-packets-are-passed-over.md
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,65 @@
 +# ADR-0354: A damaged packet is passed over, not the track
 +
 +## Status
@@ -46,6 +46,13 @@ index 00000000..f5e6eab1
 +4. **A converter's own output is held to none.** Its verification reads the
 +   new file back and refuses it if a single packet had to be passed over:
 +   what the engine writes is never damaged.
++5. **A frame is converted as it comes.** Past a damaged packet the decoder
++   reaches frames it never did before, among them, in real MP3 files, a mono
++   frame in a stereo stream. The resampler was set up once for the stream,
++   and read the mono frame's missing second plane: a null pointer, and the
++   engine crashed. When a frame's channel layout, sample format or rate is
++   not the resampler's, the resampler now takes the frame's; the output
++   does not change, so a mono frame is mixed up to the stream's stereo.
 +
 +## Verification
 +
@@ -53,7 +60,10 @@ index 00000000..f5e6eab1
 +  removed decodes, one packet passed over, one frame short; every header
 +  removed fails or yields nothing; converted to FLAC, the damage is said and
 +  the output reads back with none. Without the decision the first and third
-+  fail with the error above.
++  fail with the error above. From the `mono-frame-in-stereo-mp3` fixture,
++  a stereo stream with one mono frame decodes and converts; without
++  decision 5 the test crashes (SIGSEGV), as the engine did converting
++  "04 Obvious.mp3" on the server.
 +- `decoder-replaced-file`, `audio-convert`, `formats-probe`,
 +  `loudness-analyzer` and `local-playback` fail the same checks with and
 +  without it on macOS 27 (libvorbis absent, module files).
@@ -176,10 +186,18 @@ index 0cfedd06..6409be8e 100644
    private:
      struct Impl;
 diff --git a/src/formats/src/decoder.cpp b/src/formats/src/decoder.cpp
-index 4bd0b561..16cc02a6 100644
+index 4bd0b561..510b241e 100644
 --- a/src/formats/src/decoder.cpp
 +++ b/src/formats/src/decoder.cpp
-@@ -94,6 +94,14 @@ struct AudioDecoder::Impl {
+@@ -9,6 +9,7 @@ extern "C" {
+ #include <libavutil/dict.h>
+ #include <libavutil/error.h>
+ #include <libavutil/intreadwrite.h>
++#include <libavutil/opt.h>
+ #include <libavutil/replaygain.h>
+ #include <libavutil/samplefmt.h>
+ #include <libswresample/swresample.h>
+@@ -94,6 +95,14 @@ struct AudioDecoder::Impl {
      // only for the machine that replaced it -- and reading fails mid-track.
      std::optional<std::pair<dev_t, ino_t>> identity;
      unsigned reopened{0};
@@ -194,7 +212,62 @@ index 4bd0b561..16cc02a6 100644
      bool input_finished{false};
      bool drain_sent{false};
      bool range_finished{false};
-@@ -756,13 +764,38 @@ bool AudioDecoder::reopen_if_replaced() {
+@@ -111,9 +120,54 @@ struct AudioDecoder::Impl {
+         return decoder != nullptr && decoder->cancellation.is_cancellation_requested() ? 1 : 0;
+     }
+ 
++    // The resampler is set up for the stream as it opens, but a frame may
++    // come otherwise: an MP3 stream can carry a mono frame among stereo
++    // ones, and past a damaged packet (ADR-0354) such a frame is reached.
++    // Read with the stream's layout, its missing second plane is a null
++    // pointer. The resampler takes each frame as it is; the output does not
++    // change, so a mono frame is mixed up to the stream's stereo.
++    [[nodiscard]] core::Result<void> follow_frame_format() {
++        if (frame->ch_layout.nb_channels <= 0 || frame->sample_rate <= 0 || frame->format < 0) {
++            return std::unexpected(decoder_error(AVERROR_INVALIDDATA, "decoding a frame without a format",
++                                                 raw_path, cancellation));
++        }
++        std::int64_t rate = 0;
++        auto format = AV_SAMPLE_FMT_NONE;
++        AVChannelLayout layout{};
++        const auto read = av_opt_get_int(resampler, "in_sample_rate", 0, &rate) >= 0 &&
++                          av_opt_get_sample_fmt(resampler, "in_sample_fmt", 0, &format) >= 0 &&
++                          av_opt_get_chlayout(resampler, "in_chlayout", 0, &layout) >= 0;
++        const auto same = read && rate == frame->sample_rate && format == frame->format &&
++                          av_channel_layout_compare(&layout, &frame->ch_layout) == 0;
++        av_channel_layout_uninit(&layout);
++        if (same) {
++            return {};
++        }
++        swr_close(resampler);
++        auto result = av_opt_set_chlayout(resampler, "in_chlayout", &frame->ch_layout, 0);
++        if (result >= 0) {
++            result = av_opt_set_sample_fmt(resampler, "in_sample_fmt",
++                                           static_cast<AVSampleFormat>(frame->format), 0);
++        }
++        if (result >= 0) {
++            result = av_opt_set_int(resampler, "in_sample_rate", frame->sample_rate, 0);
++        }
++        if (result >= 0) {
++            result = swr_init(resampler);
++        }
++        if (result < 0) {
++            return std::unexpected(
++                decoder_error(result, "following a change of audio format", raw_path, cancellation));
++        }
++        return {};
++    }
++
+     [[nodiscard]] core::Result<std::optional<PcmChunk>> convert_frame() {
+         std::uint32_t skip_start = 0U;
+         std::uint32_t skip_end = 0U;
++        if (auto followed = follow_frame_format(); !followed) {
++            return std::unexpected(std::move(followed.error()));
++        }
+         const auto* skip_samples = av_frame_get_side_data(frame, AV_FRAME_DATA_SKIP_SAMPLES);
+         if (skip_samples != nullptr) {
+             constexpr std::size_t skip_sample_data_size = 10U;
+@@ -756,13 +810,38 @@ bool AudioDecoder::reopen_if_replaced() {
          return false;
      }
      const auto times = decoder.reopened + 1U;
@@ -233,7 +306,7 @@ index 4bd0b561..16cc02a6 100644
      while (true) {
          if (decoder.cancellation.is_cancellation_requested()) {
              return std::unexpected(core::Error{
-@@ -776,6 +809,8 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+@@ -776,6 +855,8 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
          }
          const auto receive_result = avcodec_receive_frame(decoder.codec, decoder.frame);
          if (receive_result >= 0) {
@@ -242,7 +315,7 @@ index 4bd0b561..16cc02a6 100644
              auto converted = decoder.convert_frame();
              if (!converted || !*converted) {
                  return converted;
-@@ -798,7 +833,16 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+@@ -798,7 +879,16 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
              continue;
          }
          if (receive_result == AVERROR_EOF) {
@@ -260,7 +333,7 @@ index 4bd0b561..16cc02a6 100644
          }
          if (receive_result != AVERROR(EAGAIN)) {
              if (reopen_if_replaced()) {
-@@ -818,7 +862,7 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+@@ -818,7 +908,7 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
                  }
                  continue;
              }
@@ -269,7 +342,7 @@ index 4bd0b561..16cc02a6 100644
          }
  
          auto read_result = 0;
-@@ -843,6 +887,17 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
+@@ -843,6 +933,17 @@ core::Result<std::optional<PcmChunk>> AudioDecoder::next_chunk() {
          }
          const auto send_result = avcodec_send_packet(decoder.codec, decoder.packet);
          av_packet_unref(decoder.packet);
@@ -324,10 +397,10 @@ index 92cb0bce..2ee58579 100644
      trackknife_cue_sheet_tests
 diff --git a/tests/decoder_damaged_packets_test.cpp b/tests/decoder_damaged_packets_test.cpp
 new file mode 100644
-index 00000000..a8dbb04c
+index 00000000..234a0aa0
 --- /dev/null
 +++ b/tests/decoder_damaged_packets_test.cpp
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,280 @@
 +// SPDX-License-Identifier: GPL-3.0-only
 +
 +// A damaged packet in an otherwise sound file -- an MP3 frame without its
@@ -557,6 +630,49 @@ index 00000000..a8dbb04c
 +        }
 +    }
 +
++    // A mono frame among stereo ones -- reached in real files past a
++    // damaged packet -- is mixed up to the stream's stereo, not read as
++    // stereo: its second plane does not exist.
++    const auto mixed_source =
++        decode_base64_file(std::filesystem::path{argv[1]} / "mono-frame-in-stereo-mp3.b64");
++    CHECK(mixed_source.has_value());
++    if (mixed_source) {
++        const auto mixed_path = write(directory / "mono-frame-in-stereo.mp3", *mixed_source);
++        auto decoder = formats::AudioDecoder::open(mixed_path.native(), {});
++        CHECK(decoder.has_value());
++        if (decoder) {
++            CHECK(decoder->output_format().channels == 2);
++        }
++        const auto mixed = decode(mixed_path);
++        if (mixed.error) {
++            std::cerr << "mono frame in stereo: " << *mixed.error << '\n';
++        }
++        CHECK(!mixed.error);
++        // Fourteen frames of 1152 samples, less the encoder's delay.
++        CHECK(mixed.frames > 1152 * 12);
++        CHECK(mixed.frames <= 1152 * 14);
++        if (flac) {
++            const auto destination = directory / "mono-frame-in-stereo.flac";
++            const auto converted = trackknife::convert::convert_audio_file(
++                {.source_raw_path = mixed_path.native(),
++                 .source_selection = {},
++                 .source_range = {},
++                 .destination_raw_path = destination.native(),
++                 .preset = *flac,
++                 .target_sample_rate = {},
++                 .sample_rate_cap = {},
++                 .target_bit_depth = {},
++                 .keep_source_bit_depth = false,
++                 .metadata = {},
++                 .artwork = {}},
++                [](std::uint64_t, std::optional<std::uint64_t>) {});
++            if (!converted) {
++                std::cerr << "converting mono frame in stereo: " << converted.error().message << '\n';
++            }
++            CHECK(converted.has_value());
++        }
++    }
++
 +    std::error_code removed;
 +    std::filesystem::remove_all(directory, removed);
 +    if (failures != 0) {
@@ -565,3 +681,145 @@ index 00000000..a8dbb04c
 +    }
 +    return EXIT_SUCCESS;
 +}
+diff --git a/tests/fixtures/audio/README.md b/tests/fixtures/audio/README.md
+index c6e20266..91f94965 100644
+--- a/tests/fixtures/audio/README.md
++++ b/tests/fixtures/audio/README.md
+@@ -409,3 +409,28 @@ base64 -d tagged-tone-flac.b64 > empty-field.flac
+ metaflac --set-tag="EMPTYFIELD=" empty-field.flac
+ base64 -w 76 empty-field.flac > empty-field-flac.b64
+ ```
++
++## Mono frame in a stereo MP3 fixture
++
++`mono-frame-in-stereo-mp3.b64` is a 44.1 kHz stereo MP3 with one mono
++frame among its stereo ones, as real files carry: 0.3 s of a 440 Hz left
++and 660 Hz right sine, and the sixth frame of a mono 440 Hz sine spliced in
++before its seventh frame. Both were made without the bit reservoir, so each
++frame decodes on its own (FFmpeg 4.4.6 / libmp3lame):
++
++```sh
++ffmpeg -f lavfi -i "sine=frequency=440:duration=0.3:sample_rate=44100" \
++  -f lavfi -i "sine=frequency=660:duration=0.3:sample_rate=44100" \
++  -filter_complex "[0][1]join=inputs=2:channel_layout=stereo" \
++  -c:a libmp3lame -b:a 128k -reservoir 0 -bitexact -write_xing 0 \
++  -id3v2_version 0 stereo.mp3
++ffmpeg -f lavfi -i "sine=frequency=440:duration=0.3:sample_rate=44100" \
++  -c:a libmp3lame -b:a 128k -reservoir 0 -bitexact -write_xing 0 \
++  -id3v2_version 0 mono.mp3
++```
++
++The frame is spliced by walking both files' MPEG frame headers. `ffprobe`
++reports 6 stereo frames, one mono, then 7 stereo. The binary SHA-256 is
++`426389a71a9151341b9b7ede37b6537ddd4e8308707706a07b8c91ce0134b340`.
++Decoded with a resampler set up only for the stream's stereo, the mono
++frame's missing second plane crashed the engine.
+diff --git a/tests/fixtures/audio/mono-frame-in-stereo-mp3.b64 b/tests/fixtures/audio/mono-frame-in-stereo-mp3.b64
+new file mode 100644
+index 00000000..a30c812b
+--- /dev/null
++++ b/tests/fixtures/audio/mono-frame-in-stereo-mp3.b64
+@@ -0,0 +1,103 @@
++//uQRAAAAvURypVpIABUQhmirSQAC+ytNznFAAGRFWbbONAAAlWjbtTZrzUnRYuYI8baQdKsdKMb
++Q0BkZZ8wYMwYEs2gDUHYm74GAQAIAADAIBgkQI0aNGjRo5g4CAIAg6Jwf4IOnOnznL+c5f3dPu5c
++HwfB8PggGJQBg/pBA5l/d0g/X5ZMsmAQJgwphQ5hwoQDJARmkRxYZwXJqz5kQ5dtY7O2du+GBQFA
++QDAoJEDE5o0aNsH3iAEAQxOH+CG7l35d3T7un3OlATD+TBB1QDD+kEOn3dIAGYACGCGEEABhsjGI
++fUkYYvwC9DH5+N3FEKgA6UHHxPLAhspj8OGGw453XW2AaAJ8AKIIG78BYQINoNv+IICsBSFUG3/x
++6RD4fGm//iqRD4fEI9Hv9QNCUJA1/xKdBoAgBBCBCAAwKGjEY+dMCAi22hkeMHqxYZfVJ0MZGN+6
++ASIY1DBgcFLtpgMHW2BHQHT4DlEmC9fhdh2jCjC/47hhhhiRHr/49TIvEkYl3/8epkXi8Yl0u/xE
++FQVER7/WCoiCoKlkxBTUUAAA//uSRAAMkp8Vw698QABbgWh277AACuRVDC/sRsFqBaFFr+iQAE4B
++gEgCOYBMAjmBbAa5gCwFwYCqCCGaBsiplHQwOYY4D9mC9AhZgVYG0YGKBfGBrgUBgHoBpA0jf2zk
++yfTW3/cPPchc9yZd34v/7Wr/2f/////SANSAALqtNMALATjAbwEYOAHjAbgWEwhoIvMJOEQTLWGH
++kyFwCnMEHAIjAtgLUwFQAtMA4AGwSAHFrkKlKQqJLvXsZVxcro4rClLGdzP9N/8p/T/+mj/0o9fX
++ZSxBgAIAKYBgAaGA1gPJgawIUYQKGombBM5ZmmIamYQcCUH34JvcSbc8G27Jn5yXQd+MU9gh+35k
++T53QGGB2LUb8lR34fu+gi48qxt6LP3L/Qn9cw93WjogvlBgKjTBIDIvzSfDAQQSUwDYSmMgQncjE
++kxDkwjkEaMDmAfT6vjfITQjAEZL1NmkkM03LrKUkkKRr67qbE7nfuY1bqs3gn7tVdnbStaSSEXTF
++YvmVssufpSlMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAP/7kkQACNJOCMOrn9iQVgFYUXf6
++MgxoVwgOfqJBUwVhQa/wiADUiYxHBjgomU0MaUipgtIbkZOQ2RGTDhrxgpQHaaOZGLD5qaEbZKmi
++EIkBPzLuLYjlW1ShLRM/r+jvEGr/R//Z0bf6tj9/Ru5qQHGaCrWUAIVgmDhhMeRMNmJ/NeLbGzEg
++Rl4wjwFtMDhAqD4WzesDPGTGhi4rrQy70texitrmKa7fpaXwKKbaX/TnRDokNTrPuMfd4q17un6o
++79ExYFTBwIMlkk0wnjk9VMK2ELDR84D40YQQwMLDBfwOhQADUi8A0mqwNISoDKxUAKB4oAi5cL6b
++P9uc+n6z2kXY/MMrr2FyTHjm2N75Ra4yl2y99zm35Y3YQTGMTeR7MoQoyKXTA65nBacxgw0aE3z4
+++e8wN4DQMJHCDzbNB8cyP4W5OaxgzQgzFpAMJCEwKDC1KmURnoraclX2xTu+2otsR/QudSu3tW+2
++T1U6/XSXJ3e/dVvXaiiSeMa5MQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/
+++5JEAAjShxXDq5+okExhSGFv+yIMxFcIDn6iQZCFYQG/7JAATBmMByY3KRk5Fmj40YK0HDmSzt3J
++kkwbmYJ2B6AY+HYGGwwBlQfgZxRwGRw8BYCjiJ026vbXM/f3c91kO3KPV936e7/f/s/k7svbb/6C
++392AMzBgEYSKmOFRm6abFGGBbgk5g2AfcaGq5RGQXg/h44SApwSQyIQTzaA68OSiuyzmUlIuKafu
++7O5v+vr+Affp/+9C/t+eQ7WvpaxSDCYFMnEI06lzllGMLFEATSUHvM0eEQHMLOBcgOiv0DUa/A0c
++rANEzEDKJXAKBAssgBfLiDtWyq7TBa/st557Cl96SWofS8ciso5feu+SSaRtxt6vaK0d8/11sQdU
++ZY+9liwDm+WA6iwjBwALGHl5kSoaDPmA3AsxgVIr2YmPaymMoCFhhOAJOYH+BAHBIZo5EZMHmIgA
++cAtTg2GpaOQSVtTkTzpDtS3VtQl3bQifAJlwZl8oeu22h1G/GVUmjjHe6x1SgLVOkaYRcPTEFNRT
++MuMTAwAAAAAAAAAAAAAAAAAA//uSRAAI8l4WRUt/oJBWAWhQd/oyCkghEy37YkFPhaFBr/CIAACy
++4GaMXHDGi8ylWNSuzA1wmYxg5MaMXlCWDAwAKEDNogMYDA2Z4DiUwNMLDjiImzXo2/ur7qoJHve/
++9n39X/1Wf/V1XK/uoo0foa6y5aqA4FAiYPgsYwDyaz3savs8IGG1DHJhJ4LUYHQBUn1sHAYmhMGM
++DlvnViTuy7FQ+zQV06OuzoquDH9hN72q3VivuqKR1P+UQjzH2Cx3Q85oUOakGNq5ovwY6JmjHhyc
++qYtQ+RzY+zHLoPoYuIVpzjoaMrGcp5m0oY0QKbxinBM/kMZsqdsUqxVljvOCjlm6nO2pndKPs9K6
++7pvVch2Qv9trK59yKXHLaGNEmeNG7anqwGBrgV5hHgLwCttMyJMYAO3S80GjjHRJMOiQwUDwKAEv
++YlLYtZ6t6fVQnT92LIp/V6AuzdjFq8ZoQr1dSRQmj36MMIRb9LzCUpiCmopmXGJgYAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/7kkQACPJ6FcQzn6CQT2FIUG/7
++IgukVQyv7EbBjwVhAb/okADMoqpiYXmKSMY6Ppm2AGCIBmpjxLKKY6kGRmB5gcAGgegZ0MBzFYHl
++2Ab8kFpI7iq+u3f0mXv0nMmTzV0drd+Ev0fLa+//Z/d6KJM59/qXgBQcxAaMlNTRFo3ehMDcBSjC
++DxEM1SZ4NMmODATmkoz8fMYBAgHToZe7j/09g/cjpLybdH37NeHf20XV+sX6+x/0bVIcGEeZzLqP
++rfdfYLjg4AfMA6AJDAeQGEwOoDcMIxCyTOnlbkzkULRMI0BAj97c3WNNegjWe0zE/QAP/KK9hj6t
++XqU3XRnDGmRYR0X3SXTfQf/bX3N3J02xat5uL00l3dixWu2j0W9/tVRCwQYKNmKGhlq6adUGBFgu
++5gfgssYRzayGOjhuZhJoIEYHkA3n7cHCOmjFAY6X6ahBEM0wxbB25l7m7e2zNnbEIe2ltS6UrnZf
++JHHOpbYbShG0v2Pa91Vb/uBqqeFLISYBmOTEFNRTMuMTAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/
+++5LEAAPTLWMCD/Cmyu9Bn4H+oNgwIgChMCPA3DAugV8wTkKmMLOIITS3/us0l4f3MKHCWDPzBM5j
++w3Ulzks4NiloDFVJJ1ZFgi2u71LAzHzKsxwkxndrTOKZNDEVldjjldld3LlypdWRLSVkvOqo6EIa
++0kr6KY7k2QpJbvsyMpjXYurs9nVHVGRrOrkdlMIJRTs2yYyZrcbF+ueK+g/drG/A4tP+XfbkUL/F
++OOJmAwgB5gbwE0YMSCjmFnBUxjM5AudMd7SnRIkFZjOgYkd4x6a/uOagNQaY2qZfnSYUA0WzXY7b
+++GC6uWOp0VBoKWi4e6ZR4hOOGWrDYgvZzag+Zxz7FmJjzoGufDiM2tGC8Q1y0VXVxPNST62smW8N
++rVdXrGh03MqpYxm3umvhXaYep3oR6ift3IuXgbn0NHQXTpjuXhpxyDuCaJ1izx+117qo2VvdnshV
++54p4bxdsqUIMU66H2q3KSWsqe6YgpqKZlxiYGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAA//uSRAAIwmgWRMt/oJBJIViZc/wwDQxXCC/wRsE0BWJJz+zAAAAx
++kBWMdJjHj0y1qNU4TA3QtgxkRaKMYZCyjAxAMcDItgBmIHDPAdaqBtBYXKIibNq1Kv6vr6kj/3/t
+++7q/7t/09mr9f/KUopSj92oAABqZiWNQy7TAUbgIDzDpUNUfcy+tNdME9DhjrDJNBlYx0KTDYQME
++AMu0umRVZdZpq2OZQ7f2oZ3df/en/ffT0or/7bv/cZ/3wALAIBgLIBiYFQA+GCfgi5hdQboaaW1f
++GlqBvxheIKadKeRpxgGfVuZ0oRkIuAYBtYjdJTnI78+eDXV2yUHflGbjZms/srUyl8l+lTo2sYcm
++VXrtJTiN9oZNxuVelaOkTALYX3JUBVEtaiqKLrQAGBQCYUBxjERmbCIc/NZoGgkwYl8HTn22hpye
++Y+RGEBpZZIVnUptS205qFSpS3du9O661n9WeRs/u2bv3djwtd7tmMJv2fuTEFNRTMuMTAwAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/7kkQACPJWFkVjf6CQT8FIUG/6
++IguIVwwv7EbBigWhAb/okAAAABBbE0mKD5ipkZAumh4xgWQUOYpioKmKFBPZgTYFcBhGIDCoDcEw
++OXCA1YQONJI1f93Q9Tq/rSP3dyauR/us9+n7P/q+n+y2aXmAAQxEZMmMjR1k3qcMDlBPTCJg/o1t
++tsWMmtDpDg+zNNjCkwsAVXaQ+7+Sy25R1XSrIaf3Ia2rMftYpTW/WT91TL/9SL0e/7Uvt36BiEmS
++bKACswEAAYMB9AUzA8gMIwkMJ9M8QTbzOtQocwkQDuP5sTcY81aGNN9TKUNBx25RT4T+vzt31ucd
++8s1rHptqfsWiok8tu+KKMK03/t+QvOHX+6yeKgdz7quqLDVZgqEmEDhjZyZoxGu2ZgUgMEYKOLRm
++OmWd5kEAU8YRIBtmBwgLB8FZuyhngoOLIQtDguJUuUeSZUpLFnNVGp2wXk1X1eyUvYtqj9aE6wnp
++HjaEbrZkctGyZ352S0K3JCZFhtMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/
+++5JEAAjCiBZDq5+gkFPBaFB3+jIJ/CMQzftiQXiFYUWv8IgA3AmLR0YqLJjlMGZpuYIGHsGOgPEB
++jhoeMYHACLgYe0AxlA8qQD/ZwOcRBEKGiVjV1tv/Z/V1Jn+4Uf+z4W6v+3t9H1q7rP3bFUSyO6hV
+++mtlK8k3SEBhwGQqIRhEYpnj3xpAUWkYEYLdmEugrRgeAE+fuocJeaMsY4KW+bWPP7LuUJZSjFE6
++Pj+frVZ/aUuld1Yi/pev0e5RFHk9e0rsudqaTFBVNKxEKmWhJrhkdvCmN4OId3/Ah27DmGN+FSd0
++/GnMxnLGZhcGKFip4hXqA+7ZS++QD7tNu9lQZofVYhj7fnK9VXer7b+a6Ps4xCkgUeqgjKTzoKAI
++eZYYbE+dp0YF+AvmELADptfZpGY7mMvHzqmavTxlIpmKxYYUCpgUCIqv9LYelryRlVIshkm/f2qb
++JL2Mvq5ZapVcjTY1vSywz+qqgGWDDI37GVqD3b7jjrkxBTUUzLjEwMAAAAAAAAAAAAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAA//uSRAAIwpMVQwufqJBQgUhQb/siC8BXDM/sRsF6hWFJv/CIwAxo
++RzGZqMgLUzjajBFBHMx7mLBMeCEXzA7QUgAQ5giQQGeBSBpc3AZfCgIgqLESJ9Sl/X6N/Wus6b63
++FPot7p2z3eOG79H9avpp+2mFfoR/8qwAAgpiAsZOYmjKhvcuYHMCVGEch0psJC92ZNkIbmM0g6lj
++g8VAlJ5jL0ROX0RpSm+upOj7tjdU3+6lz2K9YtXv0Xf90yj0d1rXWrvY9I9DUCFAgRIA2MBEADjA
++gwEMwPoCoMJRCKzPckPUzxMI3MJQA1j+6s2uPNMijQf0x9FRMfeUU+CdmdvDV3vM4eYoY5FKGVu6
++07HfXp5CJf6nItZk9t/XzANKB9rrh6H3riyQIAo+FAYwcZMYMDM1c1ieMChBWTBVBOwyeOakMfHB
++dT2aWNYDcyuFjFQHBQmDgSpJ5I5M5OEwpqZdF3g4pvp1ldrEWt6VTxT+1tljankU+Z7XhK7lu/eA
++HrtZyJZ45MQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP/7kkQACJIaCEXTf9CQTSFoZXf6
++MgnkIRMt+2JBhYWhAa/okAAAsjZLSSMNFjCisxFQMmszAdwkww65JKMOTCQDAYAKEqsCZYbMEcBO
++CpKzpDfcqrttTHu1K/t+7Qytv/s/+r7P//pADADhMZScHQJFAcFRHCpiGSXHmbawE5gowlsYQcCQ
++mBogQB6IZt0Rmh5iQCA17o7D1L2csjepun/tqyX9m5q/WKe7SP/65X930/u0MSDFTVULCoGTzUB4
++6FfMYwVA6iajjpGFYMYsIE6BmM8VjJ1Ux6iMIJGHyiuCYOPlchTjXO29S8no2lr3b39Qr7LSd2nr
++lenRfvj6ndSjTq72zIDwMQMyJNkYPCvMDKANDCRwSQ3ghQoMeyHXTCPwZQwN4C/PfmN45NCcMYLL
++bOTDT8y7GAzrJiL1o0fbxNqkNr970Oewrn1rA/SM7xljdtq1FVEOg3XzJZtl71OLkUCiUJiCmopm
++XGJgYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/
+++5JkAAAC7gtDRX0gAF1BWHuvpAALlMVVuaUAEYUTrT84oAoFwAIAMBuAJkzTAfwR0wUsFDMLtFwT
++FAYYUyKoVtMV/GVTrd3FY1AEOpMFBApDA2gOAwAkA0MAkAAQEAZsDZ0yQFELd058Y1VoA67Pp+z/
++ZZ3/R9F9f5Vb/6/o/9GkAqIAAUAYDYAhGASADBgHIHKYKyDImGIiupifrsWZcoCWGIRDUh4SkHqa
++zEGGGDOAypg74BuYC6AIkgAoYA4AEJEOC24jNQcjLt8Sejo77tO3p68WT7/7//1/p/+aTIAtoiFY
++DAoEAoDAAAmwZxkRjMIICGQPGHRjQQxpEoSBwIeMgKazYWOwozY0zIXaAIAqd3gWBTip/iwDeIsn
++/8LAL4NYAgCp/+SHDwkFsn//ydRXFsRBI7/hg/D7wpGF3AQgAwAwGA4GAwAAAyBzG3ZMDg01JYTA
++w8NDLoAhBOMxOGCsQiQjRGN0n4yUATWoIFioCroYiD28BsL/8BMFAr/4hwKgXg0/8uQEgtj//8nN
++H5OLA8/uBAP/+HzkMJiCmooA//uSRAAP8ucNzldgwABdQbn67BgAQAABpAAAACAAADSAAAAEgCAQ
++EpyXB0XVZECRGlhvYaSF2mXP66rxOUzpynef5/gCRn1RIlQKgqCoKgs9YKgqDQNA0DR6WBoGgVBU
++FQ1lQVBUGgaPcRA0DQK/WCoK/g0DQNfKgqCoK/UDQNA1YABAJUl2ERayxGQOkj0ASGtxxcWtdhIZ
++B5QZiTvP8/wBIz6JEiVAoKCgoM/oKChQUFBX/wKCgUFBQU3wUFBQoKf//CCgoFN//8FBQU5//+QU
++FBRv//9BQUF////hJiCmopmXGJgYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
++AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
