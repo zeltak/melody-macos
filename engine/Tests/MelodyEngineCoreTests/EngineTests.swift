@@ -4,14 +4,17 @@ import Foundation
 import XCTest
 @testable import MelodyEngineCore
 
-/// A stand-in for melodyd: accepts one connection on a Unix socket and
-/// answers each request line with the lines `reply` gives for it.
+/// A stand-in for melodyd: accepts connections on a Unix socket, one after
+/// another, and answers each request line with the lines `reply` gives for
+/// it. `opened` lines are sent to each connection as it is accepted.
 final class FakeEngine {
     let path: String
     private let listener: Int32
     private let thread: Thread
 
-    init(reply: @escaping (Message) -> [Message]) throws {
+    init(opened: [Message] = [], reply: @escaping (Message) -> [Message]) throws {
+        // A client gone before an answer is written: EPIPE, not the test's death.
+        signal(SIGPIPE, SIG_IGN)
         let path = "/tmp/melody-engine-test-\(UUID().uuidString.prefix(8)).sock"
         self.path = path
         unlink(path)
@@ -28,35 +31,15 @@ final class FakeEngine {
                 bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard bound == 0, listen(listener, 1) == 0 else {
+        guard bound == 0, listen(listener, 4) == 0 else {
             throw EngineError.connect("fake engine cannot listen")
         }
         self.listener = listener
         thread = Thread {
-            let client = accept(listener, nil, nil)
-            guard client >= 0 else { return }
-            defer { close(client) }
-            // The client may hang up first; that is not the fake's death.
-            var one: Int32 = 1
-            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
-            var pending = Data()
-            var chunk = [UInt8](repeating: 0, count: 4096)
             while true {
-                let count = read(client, &chunk, chunk.count)
-                if count <= 0 { return }
-                pending.append(contentsOf: chunk[0..<count])
-                while let newline = pending.firstIndex(of: 0x0A) {
-                    let line = pending[pending.startIndex..<newline]
-                    pending.removeSubrange(pending.startIndex...newline)
-                    guard let request = try? JSONSerialization.jsonObject(with: line) as? Message else {
-                        return
-                    }
-                    for answer in reply(request) {
-                        var bytes = try! JSONSerialization.data(withJSONObject: answer)
-                        bytes.append(0x0A)
-                        _ = bytes.withUnsafeBytes { write(client, $0.baseAddress!, $0.count) }
-                    }
-                }
+                let client = accept(listener, nil, nil)
+                guard client >= 0 else { return }
+                FakeEngine.serve(client, opened: opened, reply: reply)
             }
         }
         thread.start()
@@ -65,6 +48,34 @@ final class FakeEngine {
     deinit {
         close(listener)
         unlink(path)
+    }
+
+    private static func serve(_ client: Int32, opened: [Message], reply: (Message) -> [Message]) {
+        defer { close(client) }
+        // The client may hang up first; that is not the fake's death.
+        var one: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        let send = { (answer: Message) in
+            var bytes = try! JSONSerialization.data(withJSONObject: answer)
+            bytes.append(0x0A)
+            _ = bytes.withUnsafeBytes { write(client, $0.baseAddress!, $0.count) }
+        }
+        opened.forEach(send)
+        var pending = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = read(client, &chunk, chunk.count)
+            if count <= 0 { return }
+            pending.append(contentsOf: chunk[0..<count])
+            while let newline = pending.firstIndex(of: 0x0A) {
+                let line = pending[pending.startIndex..<newline]
+                pending.removeSubrange(pending.startIndex...newline)
+                guard let request = try? JSONSerialization.jsonObject(with: line) as? Message else {
+                    return
+                }
+                reply(request).forEach(send)
+            }
+        }
     }
 }
 

@@ -26,39 +26,10 @@ public enum Engine {
                             shouldStop: @escaping () -> Bool = { false }) throws -> ScanOutcome {
         let connection = try EngineConnection(socketPath: socketPath)
         defer { connection.close() }
-        try connection.send(["id": 1, "method": "job.submit",
-                             "params": ["job": "catalogue.scan"]])
-        var job: String?
-        // Finished before job.submit's answer named it.
-        var finishedEarly: [String: Message] = [:]
-        while true {
-            if shouldStop() { return .detached }
-            guard let message = try connection.receive(timeout: 0.25) else { continue }
-            if let answer = try EngineConnection.answer(message, to: 1) {
-                guard let id = (answer as? Message)?["job_id"] as? String else {
-                    throw EngineError.malformed("job.submit did not name the job it started")
-                }
-                job = id
-                if let outcome = finishedEarly[id] {
-                    return ScanOutcome(outcome)
-                }
-                continue
-            }
-            guard let event = message["event"] as? String,
-                  let data = message["data"] as? Message,
-                  let id = data["job_id"] as? String
-            else { continue }
-            switch event {
-            case "job.progress" where id == job:
-                progress(ScanCounts(data))
-            case "job.finished":
-                let outcome = data["outcome"] as? Message ?? [:]
-                if id == job { return ScanOutcome(outcome) }
-                if job == nil { finishedEarly[id] = outcome }
-            default:
-                break
-            }
-        }
+        guard let outcome = try runJob(connection, job: "catalogue.scan",
+                                       progress: { progress(ScanCounts($0)) }, shouldStop: shouldStop)
+        else { return .detached }
+        return ScanOutcome(outcome)
     }
 
     /// launchctl's arguments to restart a LaunchAgent of this user; nil
